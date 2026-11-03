@@ -42,8 +42,10 @@ rm -rf .git/modules/
 source "$SOURCE_DIR/tools/release/setup_lfs.sh"
 
 # vendor the comma-deps wheels the on-device build imports (SConstruct),
-# for devices whose venv lacks them (e.g. the C3L clone's AGNOS 12.4)
-source "$SOURCE_DIR/tools/release/vendor_device_deps.sh" "$TARGET_DIR"
+# for devices whose venv lacks them (e.g. the C3L clone's AGNOS 12.4).
+# Must NOT be sourced: it cds to the source repo for uv, which would make
+# the add/commit/LFS checks below run against the source repo, not TARGET_DIR.
+"$SOURCE_DIR/tools/release/vendor_device_deps.sh" "$TARGET_DIR"
 
 # include source commit hash and build date in commit
 GIT_HASH=$(git --git-dir="$SOURCE_DIR/.git" rev-parse HEAD)
