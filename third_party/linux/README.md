@@ -3,8 +3,8 @@
 Copies of Qualcomm kernel uapi headers from
 [commaai/agnos-kernel-sdm845](https://github.com/commaai/agnos-kernel-sdm845)
 (the kernel shipped on comma 3/3X and its clones), GPL-2.0. Identical to what
-`make headers_install` would put in `/usr/include`: `msm_ion.h` had its
-kernel-only `__user` annotations stripped.
+`make headers_install` would put in `/usr/include`: kernel-only `__user`
+annotations have been stripped.
 
 Why: the on-device scons build needs them, but some device rootfses (e.g. the
 C3L clone's AGNOS 12.4) ship a stock linux-libc-dev without them:
@@ -12,6 +12,9 @@ C3L clone's AGNOS 12.4) ship a stock linux-libc-dev without them:
 - `linux/ion.h`, `linux/msm_ion.h` — `msgq_repo/msgq/visionipc/visionbuf_ion.cc`
 - `media/msm_media_info.h` — `system/loggerd/encoder/v4l_encoder.cc`
 - `media/msm_camsensor_sdk.h` — `system/camerad/sensors/*.cc`
+- `media/cam_*.h` (the CAMX uapi: cam_defs, cam_icp, cam_isp, cam_isp_ife,
+  cam_isp_vfe, cam_req_mgr, cam_sensor, cam_sync) —
+  `system/camerad/cameras/spectra.h` and the qcom2 camera stack
 
 `SConstruct` adds `include/` to `CPPPATH` only when the system headers are
 missing (the tell is `/usr/include/linux/ion.h`), so official AGNOS devices
