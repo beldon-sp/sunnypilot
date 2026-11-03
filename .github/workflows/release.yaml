@@ -37,6 +37,7 @@ jobs:
           case "$SRC" in
             master-c3) TGT=master-c3-prebuild ;;
             test) TGT=test-prebuild ;;
+            byd) TGT=byd-prebuild ;;
             *)
               echo "Unsupported branch: $SRC"
               exit 1
