@@ -1,8 +1,18 @@
-name: release
+name: 打包预编译分支
+
 on:
-  schedule:
-    - cron: '0 9 * * *'
+  push:
+    branches: [ byd ]
   workflow_dispatch:
+    inputs:
+      source_branch:
+        description: Source branch to strip and publish
+        required: true
+        type: choice
+        options: [ byd ]
+
+permissions:
+  contents: write
 
 env:
   GIT_CONFIG_COUNT: 1
@@ -10,31 +20,71 @@ env:
   GIT_CONFIG_VALUE_0: openpilot/selfdrive/modeld/models/big_driving_tinygrad.pkl
 
 jobs:
-  build___nightly:
-    name: build __nightly
+  plan:
+    name: 规划发布
     runs-on: ubuntu-latest
-    if: github.repository == 'sunnypilot/sunnypilot'
-    permissions:
-      checks: read
-      contents: write
+    outputs:
+      source: ${{ steps.plan.outputs.source }}
+      target: ${{ steps.plan.outputs.target }}
     steps:
-    - name: Wait for green check mark
-      if: ${{ github.event_name == 'schedule' }}
-      uses: lewagon/wait-on-check-action@1d57e2c51a58d812d2765e036a028b6bdb5a6154
-      with:
-        ref: master
-        wait-interval: 30
-        running-workflow-name: 'build __nightly'
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
-        check-regexp: ^((?!.*(build prebuilt|create badges).*).)*$
-    - uses: actions/checkout@v4 # checkout version > v4 breaks nightly release script
-      with:
-        submodules: true
-        fetch-depth: 0
-    - run: ./tools/op.sh setup
-    - name: Push __nightly
-      run: BRANCH=__nightly tools/release/build_stripped.sh
-    - name: Push chestnut nightly
-      run: |
-        git lfs pull --exclude=''
-        INCLUDE_BIG_MODEL=1 BRANCH=__nightly-chestnut tools/release/build_stripped.sh
+      - id: plan
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SRC="${{ github.event.inputs.source_branch }}"
+          else
+            SRC="${{ github.ref_name }}"
+          fi
+          case "$SRC" in
+            master-c3) TGT=master-c3-prebuild ;;
+            test) TGT=test-prebuild ;;
+            *)
+              echo "Unsupported branch: $SRC"
+              exit 1
+              ;;
+          esac
+          echo "source=$SRC" >> "$GITHUB_OUTPUT"
+          echo "target=$TGT" >> "$GITHUB_OUTPUT"
+  publish:
+    name: ${{ needs.plan.outputs.source }} → ${{ needs.plan.outputs.target }}
+    needs: plan
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-${{ needs.plan.outputs.target }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.source }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: 配置 Git
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+      - name: 推送精简源码分支
+        env:
+          BRANCH: ${{ needs.plan.outputs.target }}
+          # 固定 TARGET_DIR（脚本未设置时会 mktemp 随机目录），供下一步 CNB 发布复用精简树。
+          # 必须放在 runner.temp（repo 工作区外）：脚本里的 git clean -xdff 会清掉 repo 内的未跟踪目录。
+          TARGET_DIR: ${{ runner.temp }}/stripped
+        run: ./tools/release/build_stripped.sh
+
+      - name: 同步发布到 CNB 镜像仓库
+        env:
+          BRANCH: ${{ needs.plan.outputs.target }}
+          TARGET_DIR: ${{ runner.temp }}/stripped
+          CNB_REPO: cnb.cool/beldon-op/sunnypilot.git
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          if [ -z "${CNB_TOKEN:-}" ]; then
+            echo "::warning::CNB_TOKEN secret 未配置，跳过 CNB 镜像发布"
+            exit 0
+          fi
+          cd "$TARGET_DIR"
+          # CNB https 推送认证：用户名固定为 cnb，token 作为密码
+          git remote add cnb "https://cnb:${CNB_TOKEN}@${CNB_REPO}"
+          # 与 build_stripped.sh 推 GitHub 的参数一致：精简树无 LFS 对象，跳过 LFS 钩子并关闭压缩
+          GIT_LFS_SKIP_PUSH=1 git -c pack.window=0 -c pack.depth=0 -c pack.compression=0 \
+            push -f cnb "tmp:${BRANCH}" --no-verify
+          echo "CNB 镜像已更新: https://${CNB_REPO%.git}/-/tree/${BRANCH}"
