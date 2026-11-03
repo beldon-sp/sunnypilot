@@ -76,6 +76,10 @@ function launch {
   # device deps vendored by the release pipeline (see tools/release/vendor_device_deps.sh);
   # only present in stripped trees, and takes precedence over the device venv
   [ -d "$PWD/third_party/pypi" ] && export PYTHONPATH="$PWD/third_party/pypi:$PYTHONPATH"
+  # cereal codegen resolves capnpc/capnpc-c++ via PATH (cereal/SConscript), and they
+  # must match the vendored capnp headers/libs — the device's system capnp is a
+  # different version, which fails with a codegen/library version mismatch error
+  [ -d "$PWD/third_party/pypi/capnproto/install/bin" ] && export PATH="$PWD/third_party/pypi/capnproto/install/bin:$PATH"
 
   # submodule package symlinks for PYTHONPATH imports on device.
   # on PC these come from editable installs via pyproject.toml / uv.

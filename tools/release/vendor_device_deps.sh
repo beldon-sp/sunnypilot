@@ -35,6 +35,8 @@ find "$TMP/sp" -mindepth 1 -maxdepth 1 \
   ! -name '*.dist-info' ! -name '__pycache__' ! -name 'bin' \
   -exec cp -pR {} "$VENDOR_DIR/" \;
 
-# wheel entry-point scripts (e.g. capnpc) get a shebang for the resolving
-# interpreter; the device has these tools system-wide, so drop them
+# pip's top-level bin/ holds entry-point shims whose shebang points at the
+# resolving interpreter (absent on device) — drop them. The real capnp
+# codegen toolchain ships inside capnproto/install/bin; launch_chffrplus.sh
+# puts that dir on PATH so codegen matches the vendored capnp headers/libs.
 rm -rf "$TMP/sp/bin"
