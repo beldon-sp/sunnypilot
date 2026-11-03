@@ -87,4 +87,4 @@ jobs:
           # 与 build_stripped.sh 推 GitHub 的参数一致：精简树无 LFS 对象，跳过 LFS 钩子并关闭压缩
           GIT_LFS_SKIP_PUSH=1 git -c pack.window=0 -c pack.depth=0 -c pack.compression=0 \
             push -f cnb "tmp:${BRANCH}" --no-verify
-          echo "CNB 镜像已更新: https://${CNB_REPO%.git}/-/tree/${BRANCH}"
+          echo "CNB 镜像已更新1: https://${CNB_REPO%.git}/-/tree/${BRANCH}"
