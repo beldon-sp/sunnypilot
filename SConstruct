@@ -192,6 +192,14 @@ elif arch == "Darwin":
   env.Append(CCFLAGS=["-DGL_SILENCE_DEPRECATION"])
   env.Append(CXXFLAGS=["-DGL_SILENCE_DEPRECATION"])
 
+# Some device rootfses (e.g. the C3L clone's AGNOS 12.4) ship a stock
+# linux-libc-dev without the Qualcomm uapi headers the on-device build needs
+# (linux/ion.h for msgq's visionbuf_ion.cc, media/msm_* for camerad/loggerd).
+# /usr/include/linux/ion.h missing is the tell; fall back to the vendored
+# copies from commaai/agnos-kernel-sdm845 (see third_party/linux/README.md).
+if arch != "Darwin" and not os.path.exists("/usr/include/linux/ion.h"):
+  env.Append(CPPPATH=["#third_party/linux/include"])
+
 _extra_cc = shlex.split(GetOption('ccflags') or '')
 if _extra_cc:
   env.Append(CCFLAGS=_extra_cc)
