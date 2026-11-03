@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Vendor the comma-deps-* wheels (aarch64) into the stripped tree.
+# Vendor the comma-deps-* wheels (aarch64) and the PyPI packages the manager/UI
+# import chain needs into the stripped tree.
 #
 # Why: the on-device scons build (SConstruct) and runtime code import these
 # packages, but older device venvs (e.g. the C3L clone's AGNOS 12.4) don't
@@ -12,8 +13,14 @@ TARGET_DIR="${1:?usage: vendor_device_deps.sh TARGET_DIR}"
 VENDOR_DIR="$TARGET_DIR/third_party/pypi"
 
 # the packages SConstruct imports by name; distribution names are comma-deps-<pkg>
-PKG_NAMES=(acados capnproto eigen ffmpeg json11 ncurses zeromq zstd)
+PKG_NAMES=(acados capnproto eigen ffmpeg json11 ncurses raylib zeromq zstd)
+# plain-PyPI packages the boot path needs:
+#   zstandard — top-level import in common/utils.py, so manager.py dies at
+#               import (silent boot-logo hang) without it
+#   jeepney   — UI settings wifi manager import chain
+EXTRA_PKGS=(zstandard jeepney)
 PKG_PATTERN="$(IFS='|'; echo "${PKG_NAMES[*]}")"
+EXTRA_PATTERN="$(IFS='|'; echo "${EXTRA_PKGS[*]}")"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -23,7 +30,7 @@ trap 'rm -rf "$TMP"' EXIT
 cd "$SOURCE_DIR"
 uv export --frozen --all-extras --all-groups --no-hashes --no-annotate --no-emit-project \
   --format requirements-txt -o "$TMP/all.txt"
-grep -E "^comma-deps-(${PKG_PATTERN})==" "$TMP/all.txt" > "$TMP/device.txt"
+grep -E "^(comma-deps-(${PKG_PATTERN})|(${EXTRA_PATTERN}))==" "$TMP/all.txt" > "$TMP/device.txt"
 echo "[-] vendoring device deps:"; cat "$TMP/device.txt"
 
 uv pip install --no-deps --target "$TMP/sp" \

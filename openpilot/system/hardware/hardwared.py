@@ -120,6 +120,9 @@ def set_offroad_alert_if_changed(offroad_alert: str, show_alert: bool, extra_tex
   prev_offroad_states[offroad_alert] = (show_alert, extra_text)
   set_offroad_alert(offroad_alert, show_alert, extra_text)
 
+TOUCH_EVENT_DEVICE = "/dev/input/by-path/platform-894000.i2c-event"
+
+
 def touch_thread(end_event):
   count = 0
 
@@ -129,7 +132,7 @@ def touch_thread(end_event):
   event_size = struct.calcsize(event_format)
   event_frame = []
 
-  with open("/dev/input/by-path/platform-894000.i2c-event", "rb") as event_file:
+  with open(TOUCH_EVENT_DEVICE, "rb") as event_file:
     fcntl.fcntl(event_file, fcntl.F_SETFL, os.O_NONBLOCK)
     while not end_event.is_set():
       if (count % int(1. / DT_HW)) == 0:
@@ -537,7 +540,13 @@ def main():
   ]
 
   if COMMA_HARDWARE:
-    threads.append(threading.Thread(target=touch_thread, args=(end_event,)))
+    # clones may lack tici's touch controller; a dead touch thread would take
+    # down all of hardwared (main exits when any thread dies) and with it
+    # deviceState — skip instead
+    if os.path.exists(TOUCH_EVENT_DEVICE):
+      threads.append(threading.Thread(target=touch_thread, args=(end_event,)))
+    else:
+      cloudlog.warning("touch device %s not found, skipping touch thread", TOUCH_EVENT_DEVICE)
     threads.append(threading.Thread(target=chestnut_state_thread, args=(end_event,)))
 
   for t in threads:
