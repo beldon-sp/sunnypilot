@@ -16,7 +16,12 @@ export VECLIB_MAXIMUM_THREADS=1
 export QCOM_PRIORITY=12
 
 if [ -z "$AGNOS_VERSION" ]; then
-  export AGNOS_VERSION="19.9"
+  # pin to the C3L clone's AGNOS so agnos_init never re-flashes official AGNOS onto it
+  export AGNOS_VERSION="12.4"
 fi
+
+# C3L (comma 3X lite clone, reports as tici) has no cabin camera:
+# camerad skips it entirely, and process_config.py gates the DM processes on this
+export DISABLE_DRIVER=1
 
 export STAGING_ROOT="/data/safe_staging"

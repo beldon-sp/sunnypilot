@@ -2,14 +2,14 @@ name: 打包并发布到 CNB
 
 on:
   push:
-    branches: [ byd ]
+    branches: [ byd-tici ]
   workflow_dispatch:
     inputs:
       source_branch:
         description: Source branch to strip and publish
         required: true
         type: choice
-        options: [ byd ]
+        options: [ byd-tici ]
 
 permissions:
   contents: read
@@ -21,7 +21,7 @@ env:
 
 jobs:
   publish:
-    name: byd → CNB
+    name: byd-tici → CNB
     runs-on: ubuntu-latest
     concurrency:
       group: release-cnb
@@ -46,8 +46,8 @@ jobs:
 
       - name: 同步发布到 CNB 镜像仓库
         env:
-          # 不推 GitHub，CNB 镜像分支固定叫 byd
-          BRANCH: byd
+          # 不推 GitHub，CNB 镜像分支固定叫 byd-tici
+          BRANCH: byd-tici
           TARGET_DIR: ${{ runner.temp }}/stripped
           CNB_REPO: cnb.cool/beldon-op/sunnypilot.git
           CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
