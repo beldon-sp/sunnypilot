@@ -58,6 +58,7 @@ assert arch in [
 pkg_names = ['acados', 'capnproto', 'eigen', 'ffmpeg', 'json11', 'ncurses', 'zeromq', 'zstd']
 pkgs = [importlib.import_module(name) for name in pkg_names]
 acados = pkgs[pkg_names.index('acados')]
+capnproto = pkgs[pkg_names.index('capnproto')]
 ffmpeg = pkgs[pkg_names.index('ffmpeg')]
 # Shared package ships .so/.dylib; older device venvs still have static .a only.
 # Keep static link deps (x264/z/va/drm) when the installed package is static so
@@ -199,6 +200,12 @@ elif arch == "Darwin":
 # copies from commaai/agnos-kernel-sdm845 (see third_party/linux/README.md).
 if arch != "Darwin" and not os.path.exists("/usr/include/linux/ion.h"):
   env.Append(CPPPATH=["#third_party/linux/include"])
+
+# capnp codegen must come from the same comma-deps wheel as the headers we
+# compile against, or the generated code fails its CAPNP_VERSION check (e.g.
+# the C3L clone's AGNOS 12.4 rootfs ships an older system capnpc, and wheel
+# entry-point shims are dropped by the device-deps vendoring)
+env.PrependENVPath("PATH", capnproto.BIN_DIR)
 
 _extra_cc = shlex.split(GetOption('ccflags') or '')
 if _extra_cc:
