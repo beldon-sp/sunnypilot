@@ -63,6 +63,9 @@ jobs:
             exit 0
           fi
           cd "$TARGET_DIR"
+          # commit-tree 需要提交者身份（build_stripped.sh 的 identity.sh 只在其子进程内生效）
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           # CNB https 推送认证：用户名固定为 cnb，token 作为密码
           git remote add cnb "https://cnb:${CNB_TOKEN}@${CNB_REPO}"
 
