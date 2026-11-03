@@ -73,6 +73,9 @@ function launch {
   # handle pythonpath
   ln -sfn "$(pwd)" /data/pythonpath
   export PYTHONPATH="$PWD"
+  # device deps vendored by the release pipeline (see tools/release/vendor_device_deps.sh);
+  # only present in stripped trees, and takes precedence over the device venv
+  [ -d "$PWD/third_party/pypi" ] && export PYTHONPATH="$PWD/third_party/pypi:$PYTHONPATH"
 
   # submodule package symlinks for PYTHONPATH imports on device.
   # on PC these come from editable installs via pyproject.toml / uv.
