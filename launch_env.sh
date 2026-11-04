@@ -20,6 +20,13 @@ if [ -z "$AGNOS_VERSION" ]; then
   export AGNOS_VERSION="12.4"
 fi
 
+# AGNOS rootfs images run weston as the wayland compositor; pyray (spinner, ui)
+# connects as a wayland client and needs these set before any window opens
+if [ -d /var/tmp/weston ]; then
+  export XDG_RUNTIME_DIR="/var/tmp/weston"
+  export WAYLAND_DISPLAY="wayland-0"
+fi
+
 # C3L (comma 3X lite clone, reports as tici) has no cabin camera:
 # camerad skips it entirely, and process_config.py gates the DM processes on this
 export DISABLE_DRIVER=1

@@ -1,10 +1,23 @@
 Import('env', 'arch', 'common', 'messaging')
 
-if arch != "Darwin":
-  libs = [common, messaging, 'pthread']
-  panda = env.Library('panda', ['panda.cc', 'spi.cc'])
+try:
+  import libusb
+  libusb_include = [libusb.INCLUDE_DIR]
+  libusb_libpath = [libusb.LIB_DIR]
+except ImportError:
+  # fall back to the system libusb (present on AGNOS rootfs images)
+  libusb_include = ['/usr/include/libusb-1.0']
+  libusb_libpath = []
 
-  env.Program('pandad', ['main.cc', 'pandad.cc', 'panda_safety.cc'], LIBS=[panda] + libs)
+if arch != "Darwin":
+  panda_env = env.Clone()
+  panda_env['CPPPATH'] += libusb_include
+  panda_env['LIBPATH'] += libusb_libpath
+
+  libs = [common, messaging, 'pthread', 'usb-1.0']
+  panda = panda_env.Library('panda', ['panda.cc', 'panda_usb.cc', 'spi.cc'])
+
+  panda_env.Program('pandad', ['main.cc', 'pandad.cc', 'panda_safety.cc'], LIBS=[panda] + libs)
 
   if GetOption('extras'):
-    env.Program('tests/test_pandad_canprotocol', ['tests/test_pandad_canprotocol.cc'], LIBS=[panda] + libs)
+    panda_env.Program('tests/test_pandad_canprotocol', ['tests/test_pandad_canprotocol.cc'], LIBS=[panda] + libs)

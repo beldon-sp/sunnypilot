@@ -14,13 +14,23 @@ public:
   static std::string get_name() {
     static const std::string name = []() {
       std::string model = util::read_file("/sys/firmware/devicetree/base/model");
-      return util::strip(model.substr(std::string("comma ").size()));
+      // the devicetree model string is NUL-terminated (e.g. "comma tici\0")
+      while (!model.empty() && (model.back() == '\0' || model.back() == ' ' || model.back() == '\n')) {
+        model.pop_back();
+      }
+      if (model.rfind("comma ", 0) == 0) {
+        model.erase(0, std::string("comma ").size());
+      }
+      return model;
     }();
     return name;
   }
 
   static cereal::InitData::DeviceType get_device_type() {
     static const std::map<std::string, cereal::InitData::DeviceType> device_map = {
+      // tici: comma three and clones running its dtb; upstream sunset the
+      // device but the enum value and this port still rely on it
+      {"tici", cereal::InitData::DeviceType::TICI},
       {"tizi", cereal::InitData::DeviceType::TIZI},
       {"mici", cereal::InitData::DeviceType::MICI}
     };

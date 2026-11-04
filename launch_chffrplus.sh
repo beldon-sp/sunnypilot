@@ -76,6 +76,15 @@ function launch {
   # device deps vendored by the release pipeline (see tools/release/vendor_device_deps.sh);
   # only present in stripped trees, and takes precedence over the device venv
   [ -d "$PWD/third_party/pypi" ] && export PYTHONPATH="$PWD/third_party/pypi:$PYTHONPATH"
+
+  # AGNOS ships the openpilot venv at /usr/local/venv, but it is not on PATH in
+  # every boot context (bare ssh shells get the bare system python3, which has
+  # none of the runtime deps). Activate it explicitly so python3/scons/pip all
+  # resolve to the venv interpreter regardless of who started this script.
+  if [ -x /usr/local/venv/bin/python3 ]; then
+    export VIRTUAL_ENV=/usr/local/venv
+    export PATH="/usr/local/venv/bin:$PATH"
+  fi
   # cereal codegen resolves capnpc/capnpc-c++ via PATH (cereal/SConscript), and they
   # must match the vendored capnp headers/libs — the device's system capnp is a
   # different version, which fails with a codegen/library version mismatch error

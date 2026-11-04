@@ -12,13 +12,21 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)/../.."
 TARGET_DIR="${1:?usage: vendor_device_deps.sh TARGET_DIR}"
 VENDOR_DIR="$TARGET_DIR/third_party/pypi"
 
-# the packages SConstruct imports by name; distribution names are comma-deps-<pkg>
-PKG_NAMES=(acados capnproto eigen ffmpeg json11 ncurses raylib zeromq zstd)
+# the packages SConstruct imports by name (plus libusb for the pandad USB
+# transport); distribution names are comma-deps-<pkg>
+# NOTE: raylib/pyray are deliberately NOT vendored — the comma-deps-raylib
+# build drives DRM directly ("magic" backend) while AGNOS rootfs images run
+# weston; the rootfs venv's raylib (wayland backend) is the working one.
+PKG_NAMES=(acados capnproto eigen ffmpeg json11 libusb ncurses zeromq zstd)
 # plain-PyPI packages the boot path needs:
 #   zstandard — top-level import in common/utils.py, so manager.py dies at
 #               import (silent boot-logo hang) without it
 #   jeepney   — UI settings wifi manager import chain
-EXTRA_PKGS=(zstandard jeepney)
+#   numpy/pycapnp/pyzmq/pillow — pin the uv.lock versions over whatever venv the
+#               rootfs ships; venv vintage varies (e.g. the C3L clone's carrot
+#               AGNOS 12.4 rootfs has numpy 2.1.3 / pycapnp 2.0.0, and SConstruct
+#               imports numpy at build time, cereal binds pycapnp at runtime)
+EXTRA_PKGS=(zstandard jeepney numpy pycapnp pyzmq pillow)
 PKG_PATTERN="$(IFS='|'; echo "${PKG_NAMES[*]}")"
 EXTRA_PATTERN="$(IFS='|'; echo "${EXTRA_PKGS[*]}")"
 

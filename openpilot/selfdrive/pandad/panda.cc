@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <cassert>
 #include <stdexcept>
 #include <vector>
@@ -13,8 +14,13 @@
 const bool PANDAD_MAXOUT = getenv("PANDAD_MAXOUT") != nullptr;
 
 Panda::Panda(std::string serial) {
-  handle = std::make_unique<PandaSpiHandle>(serial);
-  LOGW("connected to %s over SPI", serial.c_str());
+  try {
+    handle = std::make_unique<PandaUsbHandle>(serial);
+    LOGW("connected to %s over USB", serial.c_str());
+  } catch (const std::exception &e) {
+    handle = std::make_unique<PandaSpiHandle>(serial);
+    LOGW("connected to %s over SPI", serial.c_str());
+  }
 
   hw_type = get_hw_type();
   can_reset_communications();
@@ -33,7 +39,13 @@ std::string Panda::hw_serial() {
 }
 
 std::vector<std::string> Panda::list() {
-  return PandaSpiHandle::list();
+  std::vector<std::string> serials = PandaUsbHandle::list();
+  for (const auto &s : PandaSpiHandle::list()) {
+    if (std::find(serials.begin(), serials.end(), s) == serials.end()) {
+      serials.push_back(s);
+    }
+  }
+  return serials;
 }
 
 void Panda::set_safety_model(cereal::CarParams::SafetyModel safety_model, uint16_t safety_param) {
@@ -84,10 +96,59 @@ void Panda::set_ir_pwr(uint16_t ir_pwr) {
   handle->control_write(0xb0, ir_pwr, 0);
 }
 
+// map a legacy (DOS firmware) health layout onto the current one
+static health_t convert_legacy_health(const legacy_health_t &legacy) {
+  health_t health {};
+  health.uptime_pkt = legacy.uptime_pkt;
+  health.voltage_pkt = (uint16_t)std::min<uint32_t>(legacy.voltage_pkt, 0xFFFF);
+  health.current_pkt = (uint16_t)std::min<uint32_t>(legacy.current_pkt, 0xFFFF);
+  health.safety_tx_blocked_pkt = legacy.safety_tx_blocked_pkt;
+  health.safety_rx_invalid_pkt = legacy.safety_rx_invalid_pkt;
+  health.tx_buffer_overflow_pkt = legacy.tx_buffer_overflow_pkt;
+  health.rx_buffer_overflow_pkt = legacy.rx_buffer_overflow_pkt;
+  health.faults_pkt = legacy.faults_pkt;
+  health.flags_pkt =
+    (legacy.ignition_line_pkt ? HEALTH_FLAG_IGNITION_LINE : 0U) |
+    (legacy.ignition_can_pkt ? HEALTH_FLAG_IGNITION_CAN : 0U) |
+    (legacy.controls_allowed_pkt ? HEALTH_FLAG_CONTROLS_ALLOWED : 0U) |
+    (legacy.power_save_enabled_pkt ? HEALTH_FLAG_POWER_SAVE_ENABLED : 0U) |
+    (legacy.heartbeat_lost_pkt ? HEALTH_FLAG_HEARTBEAT_LOST : 0U) |
+    (legacy.safety_rx_checks_invalid_pkt ? HEALTH_FLAG_SAFETY_RX_CHECKS_INVALID : 0U) |
+    (legacy.som_reset_triggered ? HEALTH_FLAG_SOM_RESET_TRIGGERED : 0U);
+  health.car_harness_status_pkt = legacy.car_harness_status_pkt;
+  health.safety_mode_pkt = legacy.safety_mode_pkt;
+  health.safety_param_pkt = legacy.safety_param_pkt;
+  health.fault_status_pkt = legacy.fault_status_pkt;
+  health.alternative_experience_pkt = legacy.alternative_experience_pkt;
+  health.interrupt_load_pkt = (uint8_t)std::clamp(legacy.interrupt_load_pkt * 255.0f, 0.0f, 255.0f);
+  health.fan_power = legacy.fan_power;
+  health.spi_error_count_pkt = legacy.spi_checksum_error_count_pkt;
+  health.sbu1_voltage_mV = legacy.sbu1_voltage_mV;
+  health.sbu2_voltage_mV = legacy.sbu2_voltage_mV;
+  // sound_output_level_pkt / temperature_pkt / controls_allowed_sp_pkt have no
+  // legacy counterpart; they stay zeroed
+  return health;
+}
+
 std::optional<health_t> Panda::get_state() {
-  health_t health {0};
-  int err = handle->control_read(0xd2, 0, 0, (unsigned char*)&health, sizeof(health));
-  return err >= 0 ? std::make_optional(health) : std::nullopt;
+  // request the larger of the two layouts; the reply size identifies the
+  // firmware generation. legacy DOS firmwares answer with (at most)
+  // sizeof(legacy_health_t) bytes — field-trimmed variants in the wild are a
+  // few bytes shorter, the shared prefix (everything through fan_power) is
+  // stable across them and the union's zero-init covers any missing tail.
+  static_assert(sizeof(legacy_health_t) > sizeof(health_t));
+  union {
+    health_t health;
+    legacy_health_t legacy;
+  } buf {};
+  int err = handle->control_read(0xd2, 0, 0, (unsigned char *)&buf, sizeof(buf));
+  if (err == (int)sizeof(health_t)) {
+    return buf.health;
+  }
+  if (err > (int)sizeof(health_t) && err <= (int)sizeof(legacy_health_t)) {
+    return convert_legacy_health(buf.legacy);
+  }
+  return std::nullopt;
 }
 
 std::optional<can_health_t> Panda::get_can_state(uint16_t can_number) {

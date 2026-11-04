@@ -60,6 +60,13 @@ def flash_panda(panda_serial: str):
   panda.close()
 
 
+# legacy tici-lineage internal pandas (comma three class): the sunnypilot panda
+# library dropped UNO/DOS from INTERNAL_DEVICES, but clones shipping the DOS
+# panda still need boardd to claim it. flashing stays gated separately by
+# SUPPORTED_DEVICES, so the H7 firmware can never land on these F4 devices.
+LEGACY_INTERNAL_HW_TYPES = (b'\x05', b'\x06')  # uno, dos
+
+
 def check_panda_support(panda_serials: list[str]) -> list[str]:
   spi_serials = set(Panda.spi_list())
   for serial in panda_serials:
@@ -68,7 +75,8 @@ def check_panda_support(panda_serials: list[str]) -> list[str]:
 
   for serial in panda_serials:
     panda = Panda(serial)
-    is_internal = panda.is_internal()
+    hw_type = panda.get_type()
+    is_internal = panda.is_internal() or hw_type in LEGACY_INTERNAL_HW_TYPES
     panda.close()
     if is_internal:
       return [serial]
