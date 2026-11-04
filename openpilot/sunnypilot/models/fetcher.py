@@ -10,7 +10,7 @@ import requests
 from requests.exceptions import (SSLError, RequestException, HTTPError)
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
-from openpilot.sunnypilot.models.helpers import is_bundle_version_compatible
+from openpilot.sunnypilot.models.helpers import is_bundle_version_compatible, mirror_url
 from openpilot.cereal import custom
 
 
@@ -143,7 +143,7 @@ class ModelFetcher:
     """
     model_url, _ = self.MODEL_SOURCES[source]
     try:
-      response = requests.get(model_url, timeout=10)
+      response = requests.get(mirror_url(model_url, self.params), timeout=10)
 
       # Explicitly handle 404 differently
       if response.status_code == 404:

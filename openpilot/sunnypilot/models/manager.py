@@ -21,7 +21,8 @@ from openpilot.common.hardware.hw import Paths
 from openpilot.cereal import messaging, custom
 from openpilot.sunnypilot.models.fetcher import ModelFetcher
 from openpilot.sunnypilot.models.helpers import (ACTIVE_BUNDLE_KEYS, get_active_bundle, get_selected_bundle,
-                                                  resolve_bundle_by_ref, validate_active_bundles, verify_file)
+                                                 mirror_url, resolve_bundle_by_ref, validate_active_bundles,
+                                                 verify_file)
 
 # (connect, read) seconds. read is per-request inactivity, not a total cap
 DOWNLOAD_TIMEOUT = (30, 30)
@@ -241,7 +242,7 @@ class ModelManagerSP:
     if self._download_interrupted():
       raise DownloadCancelled("Download cancelled")
 
-    url = artifact.downloadUri.uri
+    url = mirror_url(artifact.downloadUri.uri, self.params)
     expected_hash = artifact.downloadUri.sha256
     filename = artifact.fileName
     full_path = os.path.join(destination_path, filename)

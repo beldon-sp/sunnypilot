@@ -27,6 +27,24 @@ ACTIVE_BUNDLE_KEYS = {
 }
 _LAST_VALIDATED_RAW: dict[str, dict | None] = {}
 
+# China-reachable mirrors for the model hosts (hf-mirror is a public HuggingFace proxy, jsDelivr
+# mirrors the gh-pages manifest). Artifacts are sha256-verified after download, so swapping the
+# source never changes what runs. Set ModelManager_MirrorDisabled to download from the originals.
+_MIRROR_HOST_MAP = {
+  "https://huggingface.co/": "https://hf-mirror.com/",
+  "https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/":
+    "https://cdn.jsdelivr.net/gh/sunnypilot/sunnypilot-models@gh-pages/",
+}
+
+
+def mirror_url(url: str, params: Params | None = None) -> str:
+  """Rewrites known model hosts to their China-reachable mirrors for download time only"""
+  if url and not (params or Params()).get_bool("ModelManager_MirrorDisabled"):
+    for source, mirror in _MIRROR_HOST_MAP.items():
+      if url.startswith(source):
+        return mirror + url[len(source):]
+  return url
+
 
 def _compute_hash(file_path: str) -> str | None:
   try:

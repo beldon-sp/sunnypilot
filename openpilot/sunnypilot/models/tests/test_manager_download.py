@@ -29,7 +29,7 @@ from openpilot.sunnypilot.models import manager as manager_module
 from openpilot.sunnypilot.models.fetcher import ModelFetcher, get_cached_bundles
 from openpilot.sunnypilot.models import helpers
 from openpilot.sunnypilot.models.helpers import (ACTIVE_BUNDLE_KEYS, get_active_bundle, get_active_source, get_selected_bundle,
-                                                  resolve_bundle_by_ref, validate_active_bundles)
+                                                 mirror_url, resolve_bundle_by_ref, validate_active_bundles)
 from openpilot.sunnypilot.models.manager import DownloadCancelled, ModelManagerSP
 
 FILE_NAME = 'driving_test_tinygrad.pkl'
@@ -383,6 +383,18 @@ class TestProcessArtifact(ManagerDownloadTestBase):
       self.manager._release_download_ref()
       assert self.params.remove.called == removed
 
+  def test_download_passes_the_mirror_url(self):
+    hf_url = "https://huggingface.co/datasets/sunnypilot/sunnypilot_models_v1/resolve/main/" + FILE_NAME
+    for disabled, expected in ((False, hf_url.replace("https://huggingface.co/", "https://hf-mirror.com/")), (True, hf_url)):
+      with self.subTest(mirror_disabled=disabled):
+        self.params.get_bool.return_value = disabled
+        artifact = self.make_artifact()
+        artifact.downloadUri.uri = hf_url
+        with mock.patch.object(manager_module.ModelManagerSP, "_download_file", new=mock.AsyncMock()) as download:
+          with self.assertRaises(ValueError):  # the mocked download lands no bytes, so the hash check fails
+            asyncio.run(self.manager._process_artifact(artifact, self.dest))
+        assert download.await_args.args[0] == expected
+
 
 def raw_bundle(ref: str, runner: int | None = None) -> dict:
   bundle = custom.ModelManagerSP.ModelBundle.new_message()
@@ -400,6 +412,27 @@ class TestResolveBundleByRef(OpenpilotTestCase):
     assert resolve_bundle_by_ref("small", catalog) == (small, "qcom")
     assert resolve_bundle_by_ref("big", catalog) == (big, "chestnut")
     assert resolve_bundle_by_ref("nope", catalog) is None
+
+
+class TestMirrorUrl(OpenpilotTestCase):
+  HF_URL = "https://huggingface.co/datasets/sunnypilot/sunnypilot_models_v1/resolve/main/models/m.pkl"
+  MANIFEST_URL = "https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/docs/driving_models_v25.json"
+
+  @staticmethod
+  def params(mirror_disabled: bool):
+    params = mock.MagicMock()
+    params.get_bool.return_value = mirror_disabled
+    return params
+
+  def test_model_hosts_are_rewritten(self):
+    assert mirror_url(self.HF_URL, self.params(False)) == self.HF_URL.replace("https://huggingface.co/", "https://hf-mirror.com/")
+    assert mirror_url(self.MANIFEST_URL, self.params(False)) == \
+      "https://cdn.jsdelivr.net/gh/sunnypilot/sunnypilot-models@gh-pages/docs/driving_models_v25.json"
+
+  def test_unknown_hosts_and_disabled_mirror_pass_through(self):
+    for url in ("", "https://example.com/model.pkl", self.HF_URL, self.MANIFEST_URL):
+      assert mirror_url(url, self.params(True)) == url, url
+    assert mirror_url("https://example.com/model.pkl", self.params(False)) == "https://example.com/model.pkl"
 
 
 def manifest_bundle(short_name: str, ref: str, index: int = 0, is_big: bool = False) -> dict:
