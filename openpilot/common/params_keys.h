@@ -16,6 +16,10 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"AthenadUploadQueue", {PERSISTENT, JSON}},
     {"AthenadRecentlyViewedRoutes", {PERSISTENT, STRING}},
     {"BootCount", {PERSISTENT, INT}},
+    {"BydBlinkerStalkSwap", {PERSISTENT, BOOL}},  // 1 = swap L/R stalk detents (Song Plus DM-i, see byd carstate)
+    {"BydRadarDistScale", {PERSISTENT, FLOAT}},  // 0x109 b7 distance scale u [m/count] (default 0.25)
+    {"BydRadarGapGate", {PERSISTENT, INT}},      // 0=off, 1=clear-window, 2=+abort, 3=+lane discrimination (byd desire_helper_byd)
+    {"BydRadarSlotTable", {PERSISTENT, INT}},    // 0=off, 1=display, 2=control (bus1 67ms slot table layer)
     {"CalibrationParams", {PERSISTENT, BYTES}},
     {"CameraDebugExpGain", {CLEAR_ON_MANAGER_START, STRING}},
     {"CameraDebugExpTime", {CLEAR_ON_MANAGER_START, STRING}},
@@ -76,6 +80,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"LastUpdateRouteCount", {PERSISTENT, INT, "0"}},
     {"LastUpdateTime", {PERSISTENT, TIME}},
     {"LastUpdateUptimeOnroad", {PERSISTENT, FLOAT, "0.0"}},
+    {"LaneChangeAssistSpeed", {PERSISTENT, INT, "20"}},  // MPH; 0 = assist-less (BYD-only vendor port, sunnypilot 1b0713ac11; ignored on other brands)
     {"LiveDelay", {PERSISTENT | BACKUP, BYTES}},
     {"LiveParameters", {PERSISTENT, JSON}},
     {"LiveParametersV2", {PERSISTENT, BYTES}},

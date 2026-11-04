@@ -12,16 +12,60 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.layouts.settings.developer import DeveloperLayout
 from openpilot.common.hardware import PC
 from openpilot.common.hardware.hw import Paths
+from openpilot.common.params import Params
+from openpilot.common.raw_params import get_float_param, get_int_param
 from openpilot.system.ui.lib.application import gui_app
-from openpilot.system.ui.lib.multilang import tr
+from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.widgets import DialogResult
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
 from openpilot.system.ui.widgets.list_view import button_item
 
 from openpilot.system.ui.sunnypilot.widgets.html_render import HtmlModalSP
-from openpilot.system.ui.sunnypilot.widgets.list_view import toggle_item_sp
+from openpilot.system.ui.sunnypilot.widgets.list_view import multiple_button_item_sp, toggle_item_sp
 
 PREBUILT_PATH = os.path.join(Paths.comma_home(), "prebuilt") if PC else "/data/openpilot/prebuilt"
+
+# BYD 0x109 b7 distance scale u [m/count] (docs/byd-radar-010x.md ②; pinned 0.25
+# 2026-10-19 by owner decision, kept tunable for the road test). The gap monitor
+# is u-free (r=b7/vEgo counts space) and the b7 counts path reads the factor-1
+# MSG_109_B7 placeholder, so changing this can only affect future meters-side
+# consumers (track synthesis / distance display), never control behavior.
+BYD_RADAR_SCALE_PARAM = "BydRadarDistScale"
+BYD_RADAR_SCALE_DEFAULT = 0.25
+BYD_RADAR_SCALE_CHOICES = [0.20, 0.25, 0.3048, 0.30]
+
+# BYD T8 forward-gap gate + slot-table layer, int params (card injects the slot
+# level into the RadarInterface; desire_helper_byd clamps the gap gate).
+BYD_GAP_GATE_PARAM = "BydRadarGapGate"
+BYD_GAP_GATE_DEFAULT = 0
+BYD_GAP_GATE_CHOICES = [0, 1, 2, 3]
+BYD_SLOT_TABLE_PARAM = "BydRadarSlotTable"
+BYD_SLOT_TABLE_DEFAULT = 1
+BYD_SLOT_TABLE_CHOICES = [0, 1, 2]
+
+BYD_DESCRIPTIONS = {
+  'blinker_stalk_swap': tr_noop(
+    "Swap the left/right turn-signal stalk detents (1 = exchange). Only for a " +
+    "stalk that reads the opposite way; the Song Plus DM-i is confirmed correct " +
+    "with the default. Takes effect at the next ignition."),
+  'byd_radar_scale': tr_noop(
+    "Distance scale u (meters per radar count) for the BYD 0x109 b7 field. " +
+    "Pinned at 0.25 m/count; adjust only if a measured stop-to-lead gap disagrees. " +
+    "Lane-change gap gating is scale-free and unaffected. " +
+    "Applies at the next card restart."),
+  'byd_gap_gate': tr_noop(
+    "BYD forward-gap lane-change gate. 0 = off (factory behavior). " +
+    "1 = a closing forward gap blocks a lane-change start. " +
+    "2 = also abort a started change when a NEW target closes in. " +
+    "3 = lane-aware: adjacent-lane closings are telemetry only (own-lane " +
+    "closings keep the level-2 behavior; without lateral data everything " +
+    "stays at level 2). Applies on next card restart."),
+  'byd_slot_table': tr_noop(
+    "BYD 67ms multi-target slot table. 0 = off (b7-only). " +
+    "1 = display: multi-target points feed the UI/telemetry only. " +
+    "2 = control: quality-gated slot points may become lead candidates. " +
+    "Applies at the next card restart."),
+}
 
 
 class DeveloperLayoutSP(DeveloperLayout):
@@ -50,9 +94,54 @@ class DeveloperLayoutSP(DeveloperLayout):
 
     self.prebuilt_toggle = toggle_item_sp(tr("Quickboot Mode"), "", param="QuickBootToggle", callback=self._on_prebuilt_toggled)
 
+    # BYD (Song Plus DM-i) items - visible only when the selected car is a byd
+    self._params = Params()
+    self.byd_blinker_stalk_swap_toggle = toggle_item_sp(
+      tr("BYD Blinker Stalk Swap"),
+      BYD_DESCRIPTIONS['blinker_stalk_swap'],
+      param="BydBlinkerStalkSwap",
+    )
+
+    self.byd_radar_scale_item = multiple_button_item_sp(
+      tr("BYD Radar Distance Scale"),
+      BYD_DESCRIPTIONS['byd_radar_scale'],
+      buttons=["0.20", "0.25", "0.3048", "0.30"],
+      selected_index=self._byd_radar_scale_index(),
+      callback=self._on_byd_radar_scale,
+    )
+
+    self.byd_gap_gate_item = multiple_button_item_sp(
+      tr("BYD Forward Gap Gate"),
+      BYD_DESCRIPTIONS['byd_gap_gate'],
+      buttons=["Off", "Level 1", "Level 2", "Level 3 (lane)"],
+      selected_index=self._byd_int_param_index(BYD_GAP_GATE_PARAM, BYD_GAP_GATE_DEFAULT, BYD_GAP_GATE_CHOICES),
+      param=BYD_GAP_GATE_PARAM,
+    )
+
+    self.byd_slot_table_item = multiple_button_item_sp(
+      tr("BYD Radar Slot Table"),
+      BYD_DESCRIPTIONS['byd_slot_table'],
+      buttons=["Off", "Display", "Control"],
+      selected_index=self._byd_int_param_index(BYD_SLOT_TABLE_PARAM, BYD_SLOT_TABLE_DEFAULT, BYD_SLOT_TABLE_CHOICES),
+      param=BYD_SLOT_TABLE_PARAM,
+    )
+
     self.error_log_btn = button_item(tr("Error Log"), tr("VIEW"), tr("View the error log for sunnypilot crashes."), callback=self._on_error_log_clicked)
 
-    self.items: list = [self.show_advanced_controls, self.enable_github_runner_toggle, self.enable_copyparty_toggle, self.prebuilt_toggle, self.error_log_btn,]
+    self.items: list = [self.show_advanced_controls, self.enable_github_runner_toggle, self.enable_copyparty_toggle, self.prebuilt_toggle,
+                        self.byd_blinker_stalk_swap_toggle, self.byd_radar_scale_item, self.byd_gap_gate_item, self.byd_slot_table_item,
+                        self.error_log_btn,]
+
+  def _byd_radar_scale_index(self) -> int:
+    u = get_float_param(self._params, BYD_RADAR_SCALE_PARAM, BYD_RADAR_SCALE_DEFAULT)
+    return min(range(len(BYD_RADAR_SCALE_CHOICES)), key=lambda i: abs(BYD_RADAR_SCALE_CHOICES[i] - u))
+
+  def _on_byd_radar_scale(self, button_index: int):
+    self._params.put(BYD_RADAR_SCALE_PARAM, BYD_RADAR_SCALE_CHOICES[button_index])
+
+  def _byd_int_param_index(self, key: str, default: int, choices: list[int]) -> int:
+    v = get_int_param(self._params, key, default)
+    return min(range(len(choices)), key=lambda i: abs(choices[i] - v))
 
   @staticmethod
   def _on_prebuilt_toggled(state):
@@ -87,6 +176,12 @@ class DeveloperLayoutSP(DeveloperLayout):
   def _update_state(self):
     disable_updates = ui_state.params.get_bool("DisableUpdates")
     show_advanced = ui_state.params.get_bool("ShowAdvancedControls")
+    byd = ui_state.CP is not None and ui_state.CP.brand == "byd"
+
+    self.byd_blinker_stalk_swap_toggle.set_visible(byd)
+    self.byd_radar_scale_item.set_visible(byd)
+    self.byd_gap_gate_item.set_visible(byd)
+    self.byd_slot_table_item.set_visible(byd)
 
     if (prebuilt_file := os.path.exists(PREBUILT_PATH)) != ui_state.params.get_bool("QuickBootToggle"):
       ui_state.params.put_bool("QuickBootToggle", prebuilt_file)

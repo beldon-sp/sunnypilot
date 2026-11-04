@@ -17,6 +17,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.common.gps import get_gps_location_service
 
 from openpilot.selfdrive.car.car_events import CarEvents
+from openpilot.selfdrive.controls.lib.assist_less_lane_change import get_assist_less_lane_change
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck, ExcessiveActuationType
@@ -53,6 +54,14 @@ MonitoringPolicy = log.DriverMonitoringState.MonitoringPolicy
 TurnDirection = custom.ModelDataV2SP.TurnDirection
 
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
+
+# BYD M1 longitudinal firmware capability gate: with AlphaLongitudinalEnabled
+# the controller streams the 0x32D/E/F ACC-domain trio (ACC_HUD_ADAS/ACC_CMD/
+# ACC_AEB) at 50 Hz; panda firmware without the BYD_PARAM_LONGITUDINAL safety
+# param rejects ~150 frames/s while engaged. Latch the watchdog when the
+# rejected-frame delta exceeds this per second (safetyTxBlocked counters are
+# cumulative per panda init, see the resync in update).
+BYD_LONG_FW_BLOCKED_PER_SEC = 60
 
 
 class SelfdriveD:
@@ -127,6 +136,17 @@ class SelfdriveD:
     self.CS_prev = car.CarState.new_message()
     self.AM = AlertManager()
     self.events = Events()
+
+    # BYD M1 watchdog state (see BYD_LONG_FW_BLOCKED_PER_SEC above)
+    self.byd_long_fw_blocked = False
+    self._byd_long_blocked_prev = None
+    self._byd_long_blocked_acc = 0
+
+    # Vendor assist-less lane change (LaneChangeAssistSpeed=0): second instance
+    # of the same latch controlsd runs to release latActive - events must be
+    # produced here (this fork has no NO_ACTUATION->latActive propagation chain,
+    # 案A); identical carState inputs converge the two within one frame.
+    self.assist_less_lane_change = get_assist_less_lane_change(self.CP.brand)
 
     self.initialized = False
     self.enabled = False
@@ -287,8 +307,19 @@ class SelfdriveD:
           self.events.add(EventName.pcmEnable)
 
       # Disable on rising edge of accelerator or brake. Also disable on brake when speed > 0
+      # BYD: the brake is not a disengage. cruiseState.enabled tracks the ACC
+      # main posture (byd carstate), which the brake does not drop - a
+      # pedalPressed here would soft-disable the longitudinal state machine
+      # after 3 s with no rising edge left to recover it, and would take the
+      # lateral down with the session churn the main latch exists to absorb.
+      # Yielding is handled downstream instead: longitudinal via the
+      # controller's session/brake gate; lateral does not yield to the brake
+      # at all (only main-off exits).
+      brake_disables = CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)
+      if self.CP.brand == 'byd':
+        brake_disables = False
       if (CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator) or \
-        (CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)) or \
+        brake_disables or \
         (CS.regenBraking and (not self.CS_prev.regenBraking or not CS.standstill)):
         self.events.add(EventName.pedalPressed)
 
@@ -370,6 +401,13 @@ class SelfdriveD:
                                                     LaneChangeState.laneChangeFinishing):
       self.events.add(EventName.laneChange)
 
+    # Vendor assist-less lane change: same "Changing Lanes" display while the
+    # driver steers the lane change manually (latActive release runs on the
+    # controlsd side with the identical latch). No-op while the assist mode is
+    # enabled (LaneChangeAssistSpeed > 0, where the desire machine owns it).
+    if self.assist_less_lane_change.update(CS):
+      self.events.add(EventName.laneChange)
+
     # Handle lane turn
     lane_turn_direction = self.sm['modelDataV2SP'].laneTurnDirection
     if lane_turn_direction == TurnDirection.turnLeft:
@@ -392,6 +430,25 @@ class SelfdriveD:
 
       if log.PandaState.FaultType.relayMalfunction in pandaState.faults:
         self.events.add(EventName.relayMalfunction)
+
+    # BYD M1: longitudinal firmware capability watchdog - AlphaLongitudinalEnabled on
+    # firmware without the LONGITUDINAL safety param means every 0x32D/E/F frame the
+    # controller transmits is rejected; latch once and keep the driver informed so the
+    # car is never driven believing OP longitudinal is active when it is inert.
+    if (self.CP.brand == "byd" and self.CP.openpilotLongitudinalControl and
+        not REPLAY and self.sm.all_checks(['pandaStates'])):
+      blocked = sum(ps.safetyTxBlocked for ps in self.sm['pandaStates'])
+      # safety re-init (mode/param switch, reflash) resets the counters - resync
+      if self._byd_long_blocked_prev is None or blocked < self._byd_long_blocked_prev:
+        self._byd_long_blocked_prev = blocked
+      self._byd_long_blocked_acc += blocked - self._byd_long_blocked_prev
+      self._byd_long_blocked_prev = blocked
+      if self.sm.frame % int(1.0 / DT_CTRL) == 0:
+        if self._byd_long_blocked_acc > BYD_LONG_FW_BLOCKED_PER_SEC:
+          self.byd_long_fw_blocked = True
+        self._byd_long_blocked_acc = 0
+      if self.byd_long_fw_blocked:
+        self.events.add(EventName.bydLongFirmwareMissing)
 
     # Handle HW and system malfunctions
     # Order is very intentional here. Be careful when modifying this.

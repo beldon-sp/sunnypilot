@@ -1,5 +1,6 @@
 from openpilot.cereal import log, custom
 from openpilot.common.constants import CV
+from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
 from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AutoLaneChangeController, AutoLaneChangeMode
 from openpilot.sunnypilot.selfdrive.controls.lib.lane_turn_desire import LaneTurnController
@@ -20,6 +21,8 @@ TURN_DESIRES = {
 
 class DesireHelper:
   def __init__(self):
+    self.params = Params()
+    self.frame = 0
     self.lane_change_state = LaneChangeState.off
     self.lane_change_direction = LaneChangeDirection.none
     self.lane_change_timer = 0.0
@@ -28,17 +31,41 @@ class DesireHelper:
     self.alc = AutoLaneChangeController(self)
     self.lane_turn_controller = LaneTurnController(self)
     self.lane_turn_direction = TurnDirection.none
+    # state slot for the brand clear-window hooks (see _update_clear_window);
+    # unused by the stock no-op implementations
+    self.lane_change_clear_time = 0.0
+    # lane-change minimum speed floor; stock constant, brand subclasses may
+    # replace it with a param-driven value (see desire_helper_byd)
+    self.lane_change_speed_floor_ms = LANE_CHANGE_SPEED_MIN
+
+  # ── brand adaptation hooks - stock defaults are behavior-neutral no-ops;
+  #    desire_helper_byd.BydDesireHelper overrides them with the vendor port ──
+  def _update_clear_window(self, carstate):
+    pass
+
+  def _clear_window_ok(self) -> bool:
+    return True
+
+  def _mid_maneuver_abort(self, carstate) -> bool:
+    return False
+
+  def _read_params(self):
+    # brand subclass extension point, refreshed every 100 update() calls
+    pass
 
   @staticmethod
   def get_lane_change_direction(CS):
     return LaneChangeDirection.left if CS.leftBlinker else LaneChangeDirection.right
 
   def update(self, carstate, lateral_active, lane_change_prob, left_edge_detected=False, right_edge_detected=False):
+    self.frame += 1
+    if self.frame % 100 == 0:
+      self._read_params()
     self.alc.update_params()
     self.lane_turn_controller.update_params()
     v_ego = carstate.vEgo
     one_blinker = carstate.leftBlinker != carstate.rightBlinker
-    below_lane_change_speed = v_ego < LANE_CHANGE_SPEED_MIN
+    below_lane_change_speed = v_ego < self.lane_change_speed_floor_ms
 
     # Lane turn controller update
     self.lane_turn_controller.update_lane_turn(blindspot_left=carstate.leftBlindspot, blindspot_right=carstate.rightBlindspot,
@@ -53,6 +80,7 @@ class DesireHelper:
       if self.lane_change_state == LaneChangeState.off and one_blinker and not self.prev_one_blinker and not below_lane_change_speed:
         self.lane_change_state = LaneChangeState.preLaneChange
         self.lane_change_timer = 0.0
+        self.lane_change_clear_time = 0.0
         # Initialize lane change direction to prevent UI alert flicker
         self.lane_change_direction = self.get_lane_change_direction(carstate)
 
@@ -72,25 +100,40 @@ class DesireHelper:
 
         self.alc.update_lane_change(blindspot_detected, edge_detected, carstate.brakePressed, torque_applied)
 
+        # brand clear-window hook (stock no-op; BYD accumulates same-side
+        # blindspot clearance - see desire_helper_byd)
+        self._update_clear_window(carstate)
+
         if not one_blinker or below_lane_change_speed:
           self.lane_change_state = LaneChangeState.off
           self.lane_change_direction = LaneChangeDirection.none
           self.lane_change_timer = 0.0
-        elif (torque_applied or self.alc.auto_lane_change_allowed) and not self.alc.lane_change_blocked:
+        # brand clear-window gate (stock _clear_window_ok() is always True;
+        # BYD requires fresh rear-traffic clearance before any start path)
+        elif (torque_applied or self.alc.auto_lane_change_allowed) and not self.alc.lane_change_blocked and self._clear_window_ok():
           self.lane_change_state = LaneChangeState.laneChangeStarting
           self.lane_change_timer = 0.0
+          self.lane_change_clear_time = 0.0
 
       elif self.lane_change_state == LaneChangeState.laneChangeStarting:
-        self.lane_change_timer += DT_MDL
-
-        if lane_change_prob < 0.02 and self.lane_change_timer >= LANE_CHANGE_START_TIME:
+        # brand mid-maneuver abort hook (stock returns False; BYD falls back
+        # to preLaneChange KEEPING the direction on a fresh same-side BSD hit,
+        # see desire_helper_byd - laneChangeFinishing is never aborted)
+        if self._mid_maneuver_abort(carstate):
+          self.lane_change_state = LaneChangeState.preLaneChange
+          self.lane_change_direction = self.get_lane_change_direction(carstate)
           self.lane_change_timer = 0.0
-          if one_blinker:
-            self.lane_change_state = LaneChangeState.preLaneChange
-            self.lane_change_direction = self.get_lane_change_direction(carstate)
-          else:
-            self.lane_change_state = LaneChangeState.off
-            self.lane_change_direction = LaneChangeDirection.none
+          self.lane_change_clear_time = 0.0
+        else:
+          self.lane_change_timer += DT_MDL
+          if lane_change_prob < 0.02 and self.lane_change_timer >= LANE_CHANGE_START_TIME:
+            self.lane_change_timer = 0.0
+            if one_blinker:
+              self.lane_change_state = LaneChangeState.preLaneChange
+              self.lane_change_direction = self.get_lane_change_direction(carstate)
+            else:
+              self.lane_change_state = LaneChangeState.off
+              self.lane_change_direction = LaneChangeDirection.none
 
     self.prev_one_blinker = one_blinker and lateral_active
 
@@ -105,3 +148,13 @@ class DesireHelper:
           self.desire = log.Desire.laneChangeRight
 
     self.alc.update_state()
+
+
+def get_desire_helper(brand: str) -> DesireHelper:
+  """Brand factory for the desire machine. Stock brands get the base class;
+  BYD gets BydDesireHelper (vendor lane-change port). Lazy import keeps the
+  stock DesireHelper module free of a top-level BYD dependency."""
+  if brand == "byd":
+    from openpilot.selfdrive.controls.lib.desire_helper_byd import BydDesireHelper
+    return BydDesireHelper()
+  return DesireHelper()

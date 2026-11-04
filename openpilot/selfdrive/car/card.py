@@ -9,6 +9,8 @@ from openpilot.cereal import log, custom
 from opendbc.car.structs import car
 
 from openpilot.common.params import Params
+from openpilot.common.raw_params import get_float_param
+from opendbc.car.byd.radar_interface import RADAR_DIST_SCALE_DEFAULT, SLOT_TABLE_LEVEL_MAX
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper
 from openpilot.common.swaglog import cloudlog, ForwardingHandler
 
@@ -26,6 +28,15 @@ from openpilot.sunnypilot.mads.helpers import set_alternative_experience, set_ca
 from openpilot.sunnypilot.selfdrive.car import interfaces as sunnypilot_interfaces
 
 REPLAY = "REPLAY" in os.environ
+
+# BYD Song Plus DM-i: the DiPilot camera (MPC) faults with 'check multifunction
+# video controller' when it sees the UDS/isotp firmware-query frames that card
+# broadcasts on the powertrain bus during startup (the panda relays them to
+# bus 2 while still in elm327 mode). The platform is fixed via CAN auto-match,
+# so the query adds nothing. Set the flag here directly - fingerprint() honors
+# SKIP_FW_QUERY in opendbc/car/car_helpers.py; the launch_env.sh route proved
+# unreliable on carrot's device (env var never reached the card process).
+os.environ.setdefault("SKIP_FW_QUERY", "1")
 
 EventName = log.OnroadEvent.EventName
 
@@ -126,6 +137,14 @@ class Car:
     # mads
     set_alternative_experience(self.CP, self.CP_SP, self.params)
     set_car_specific_params(self.CP, self.CP_SP, self.params)
+
+    # byd radar runtime tunables (carrot radarcan injection): dist scale +
+    # slot-table level ride the RadarInterface instance; the gap monitor is
+    # scale-free. Defaults live in opendbc.car.byd.radar_interface.
+    if self.CP.brand == "byd" and self.RI is not None and hasattr(self.RI, "radar_dist_scale"):
+      self.RI.radar_dist_scale = get_float_param(self.params, "BydRadarDistScale", RADAR_DIST_SCALE_DEFAULT)
+      self.RI.slot_table_level = min(SLOT_TABLE_LEVEL_MAX,
+                                     max(0, self.params.get_int("BydRadarSlotTable")))
 
     openpilot_enabled_toggle = self.params.get_bool("OpenpilotEnabledToggle")
     controller_available = self.CI.CC is not None and openpilot_enabled_toggle and not self.CP.dashcamOnly

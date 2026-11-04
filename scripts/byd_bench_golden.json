@@ -1,0 +1,53 @@
+{
+  "schema": "byd_bench_golden/v1",
+  "corpus_base": "~/Documents/work/op/sunnypilot/docs_site/byd_logs_2026-10-05_07/realdata",
+  "corpus": [
+    {
+      "route": "00000002--d3da5795a9",
+      "seg": "00000002--d3da5795a9--3",
+      "sha256": "9a6021714eff3933e677f3707e2e986e4ffaa5a81882cadfa0e425927a2062ec",
+      "note": "主段：360s 全程 engaged、含 sendcan、双平台(设备10-08/M4 10-09)验证史"
+    },
+    {
+      "route": "00000003--8801cc6fda",
+      "seg": "00000003--8801cc6fda--3",
+      "sha256": "24f1a39f25d9ba58042bd06dbcca26c1a5e4b708420be9e983c9827cf03fac2a",
+      "note": "副段：与指纹反事实同段，覆盖第二日期驾驶流防过拟合"
+    }
+  ],
+  "baseline_commit": "f6fd2df6 + byd-bench-golden-replay harness 修复（垫片前移 + card 闸门输入补齐，见 design D3.1）",
+  "harness": {
+    "bench_script": "scripts/byd_replay_bench.py",
+    "mac_params_shim": "先于 openpilot 导入（40ea446e 后 process_replay 链早绑 Params）",
+    "card_lateral_inputs": ["modelV2", "liveParameters", "livePose", "selfdriveState"]
+  },
+  "runs": [
+    {"chain": "card", "seg": "00000002--d3da5795a9--3", "metric": "316.LKAS_Output", "n": 3561, "mean": 21.585509688289807, "max": 174.0},
+    {"chain": "card,controlsd", "seg": "00000002--d3da5795a9--3", "metric": "316.LKAS_Output", "n": 3561, "mean": 43.84274080314518, "max": 200.0},
+    {"chain": "card", "seg": "00000003--8801cc6fda--3", "metric": "316.LKAS_Output", "n": 3564, "mean": 13.138327721661055, "max": 72.0},
+    {"chain": "card,controlsd", "seg": "00000003--8801cc6fda--3", "metric": "316.LKAS_Output", "n": 3564, "mean": 28.43658810325477, "max": 130.0}
+  ],
+  "drift_notes": [
+    {
+      "chain": "card,controlsd",
+      "metric": "316.LKAS_Output",
+      "old": {"n": 3561, "mean": 43.851, "max": 200.0, "precision": "docs 打印精度(旧散文基线, 锚 bf3a799d/0392e07e)"},
+      "new": {"n": 3561, "mean": 43.84274080314518, "max": 200.0},
+      "commit": "d5fc77c4",
+      "mechanism": "合成 lead 移植翻转 radarUnavailable=False：radarState→controlsd→carrot 巡航链致部分帧横向力矩微差；抽查法=d5fc77c4 树复跑逐位 43.843、a551f080 不变、40ea446e 前(79d87cc3)为 43.851"
+    }
+  ],
+  "episode_2026_10_21_degenerate": {
+    "values_without_harness_fix": {
+      "card": {"n": 3561, "mean": 46.601, "max": 200.0},
+      "card,controlsd": {"n": 3561, "mean": 46.601, "max": 200.0},
+      "sub_card": {"n": 3564, "mean": 44.254, "max": 137.0},
+      "sub_card,controlsd": {"n": 3564, "mean": 44.254, "max": 137.0}
+    },
+    "cause": "40ea446e 上游合并带进 LateralStartupGate(e7987ed0/7ceee116)而 replay card 输入集缺 modelV2/liveParameters/livePose/selfdriveState → 台架闸门永不开、latActive 帧力矩清零，两档链退化逐位相同（≈日志原值幅值 main 46.711/200、sub 44.499/137）",
+    "disposition": "经用户批准修 harness（scripts/ 内垫片前移+输入补齐）后重立基线；此组退化数字不得作为 --accept 目标回填"
+  },
+  "future_metrics": {
+    "32E.AccelCmd": "0x32E 缺失为设计行为（日志 CP.oPIC=False，carcontroller 门跳过纵向）；oPIC=True 语料出现后补纵向指标并扩 corpus"
+  }
+}

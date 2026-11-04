@@ -52,7 +52,11 @@ class ModularAssistiveDrivingSystem:
       self.no_main_cruise = True
 
     # read params on init
-    self.enabled_toggle = self.params.get_bool("Mads")
+    # Plan A: MADS is short-circuited for BYD - it never owns the lateral
+    # switch (engage/exit runs on the BYD-enforced engaged gate instead, see
+    # sunnypilot/mads/helpers.set_alternative_experience). enabled_toggle is
+    # only read here and in the UI, so gating it at init is durable.
+    self.enabled_toggle = self.params.get_bool("Mads") and self.CP.brand != "byd"
     self.main_enabled_toggle = self.params.get_bool("MadsMainCruiseAllowed")
     self.steering_mode_on_brake = read_steering_mode_param(self.CP, self.CP_SP, self.params)
     self.unified_engagement_mode = self.params.get_bool("MadsUnifiedEngagementMode")

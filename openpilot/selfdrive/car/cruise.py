@@ -56,14 +56,32 @@ class VCruiseHelper(VCruiseHelperSP):
         self.update_speed_limit_assist_v_cruise_non_pcm()
         self.v_cruise_cluster_kph = self.v_cruise_kph
       else:
-        self.v_cruise_kph = CS.cruiseState.speed * CV.MS_TO_KPH
-        self.v_cruise_cluster_kph = CS.cruiseState.speedCluster * CV.MS_TO_KPH
-        if CS.cruiseState.speed == 0:
-          self.v_cruise_kph = V_CRUISE_UNSET
-          self.v_cruise_cluster_kph = V_CRUISE_UNSET
-        elif CS.cruiseState.speed == -1:
-          self.v_cruise_kph = -1
-          self.v_cruise_cluster_kph = -1
+        if self.CP.brand == "byd":
+          # BYD stalk-owned target (Song Plus DM-i, real-car bug 2026-10-05:
+          # Experimental + AlphaLong never accelerated, speed pinned at ~35).
+          # BYD is pcmCruise=True (byd interface) and the stock branch below
+          # maps SetSpeed==0 to V_CRUISE_UNSET - but BYD CarState emits no
+          # buttonEvents (byd carstate only caches PCM_BUTTONS for the RES
+          # spoof), so nothing can ever raise that unset number and the long
+          # plan never commands positive accel. The number the driver CAN
+          # change is the stalk's radar SetSpeed, which the port mirrors into
+          # cruiseState.speed/speedCluster (no artificial 30 km/h floor), so
+          # sync it directly gated by brand. Zero-hold: main-on frames can
+          # carry SetSpeed==0 for the first 1-2 s of a session (byd
+          # carcontroller, routes 31/2d) - keep the last real target through
+          # the blip instead of commanding a deceleration to zero.
+          if CS.cruiseState.speed > 0:
+            self.v_cruise_kph = CS.cruiseState.speed * CV.MS_TO_KPH
+            self.v_cruise_cluster_kph = CS.cruiseState.speedCluster * CV.MS_TO_KPH
+        else:
+          self.v_cruise_kph = CS.cruiseState.speed * CV.MS_TO_KPH
+          self.v_cruise_cluster_kph = CS.cruiseState.speedCluster * CV.MS_TO_KPH
+          if CS.cruiseState.speed == 0:
+            self.v_cruise_kph = V_CRUISE_UNSET
+            self.v_cruise_cluster_kph = V_CRUISE_UNSET
+          elif CS.cruiseState.speed == -1:
+            self.v_cruise_kph = -1
+            self.v_cruise_cluster_kph = -1
     else:
       self.v_cruise_kph = V_CRUISE_UNSET
       self.v_cruise_cluster_kph = V_CRUISE_UNSET

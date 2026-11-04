@@ -13,6 +13,7 @@ from openpilot.common.swaglog import cloudlog
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
+from openpilot.selfdrive.controls.lib.assist_less_lane_change import get_assist_less_lane_change
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -58,6 +59,9 @@ class Controls(ControlsExt):
 
     self.LoC = LongControl(self.CP, self.CP_SP)
     self.VM = VehicleModel(self.CP)
+    # Vendor assist-less lane change (LaneChangeAssistSpeed=0): releases latActive
+    # for a driver-steered lane change (sunnypilot 1b0713ac11 T3). Null for non-BYD.
+    self.assist_less = get_assist_less_lane_change(self.CP.brand)
     self.LaC: LatControl
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
       self.LaC = LatControlAngle(self.CP, self.CP_SP, self.CI, DT_CTRL)
@@ -117,6 +121,11 @@ class Controls(ControlsExt):
 
     CC.latActive = _lat_active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
+    # vendor assist-less lane change yield: a blinker plus the driver holding the
+    # wheel in the same direction releases lateral entirely for the maneuver
+    # (LaneChangeAssistSpeed=0; no-op for every other brand)
+    if self.assist_less.update(CS):
+      CC.latActive = False
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and \
                     (self.CP.openpilotLongitudinalControl or not self.CP_SP.pcmCruiseSpeed)
 
@@ -136,6 +145,10 @@ class Controls(ControlsExt):
     # accel PID loop
     pid_accel_limits = self.CI.get_pid_accel_limits(self.CP, self.CP_SP, CS.vEgo, CS.vCruise * CV.KPH_TO_MS)
     actuators.accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits))
+    # plan jerk at t=0 (carrot's longitudinalPlan.jTargetNow): bydcarcontroller
+    # derives the ACC_CMD JerkUpper/Lower envelope and the pre-brake catch-up
+    # guard from it; inert for every other brand
+    actuators.jerk = float(long_plan.jerks[0]) if len(long_plan.jerks) else 0.0
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage

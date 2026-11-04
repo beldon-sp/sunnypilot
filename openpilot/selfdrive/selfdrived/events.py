@@ -750,6 +750,17 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.NO_ENTRY: NoEntryAlert(tr("Controls Mismatch")),
   },
 
+  # BYD M1 firmware capability gate: AlphaLongitudinalEnabled is on but the
+  # flashed panda firmware has no BYD_PARAM_LONGITUDINAL support, so it
+  # rejects the whole 0x32D/E/F stream (safetyTxBlocked watchdog in selfdrived.py).
+  EventName.bydLongFirmwareMissing: {
+    ET.SOFT_DISABLE: SoftDisableAlert(tr("Longitudinal firmware missing")),
+    ET.NO_ENTRY: NoEntryAlert(tr("Reflash the byd panda bin or disable AlphaLongitudinal"),
+                              alert_text_1=tr("Longitudinal Firmware Missing")),
+    ET.PERMANENT: NormalPermanentAlert(tr("Longitudinal Firmware Missing"),
+                                       tr("Firmware rejects ACC_CMD - reflash or disable AlphaLongitudinal")),
+  },
+
   # This alert can be thrown for the following reasons:
   # - No CAN data received at all
   # - CAN data is received, but some message are not received at the right frequency

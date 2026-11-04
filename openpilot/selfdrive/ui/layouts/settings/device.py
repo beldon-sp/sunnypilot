@@ -98,6 +98,19 @@ class DeviceLayout(Widget):
       gui_app.push_widget(alert_dialog(tr("Disengage to Reset Calibration")))
       return
 
+    # BYD: openpilot owns the EPS's only 0x316 LKAS stream (the camera's own
+    # frame is blocked bus2->bus0 by the panda fwd hook). OnroadCycleRequested
+    # below stops card for seconds (hardwared started=False cycle), which
+    # starves the EPS while the car is powered and latches 0x318 TorqueFailed -
+    # 'LKAS Fault: Restart the car to engage' until an ignition power cycle
+    # (byd carcontroller update() comment). Offroad the only_onroad daemons
+    # (calibrationd/torqued/card) are already stopped, so a plain param removal
+    # is enough and takes effect at the next ignition.
+    byd = ui_state.CP is not None and ui_state.CP.brand == "byd"
+    if byd and ui_state.started:
+      gui_app.push_widget(alert_dialog(tr("Turn off the car to reset calibration.\nBYD's EPS latches an LKAS fault if openpilot restarts while powered.")))
+      return
+
     def reset_calibration(result: DialogResult):
       # Check engaged again in case it changed while the dialog was open
       if ui_state.engaged or result != DialogResult.CONFIRM:
@@ -107,7 +120,8 @@ class DeviceLayout(Widget):
       self._params.remove("LiveTorqueParameters")
       self._params.remove("LiveParametersV2")
       self._params.remove("LiveDelay")
-      self._params.put_bool("OnroadCycleRequested", True, block=True)
+      if not byd:
+        self._params.put_bool("OnroadCycleRequested", True, block=True)
       self._update_calib_description()
 
     dialog = ConfirmDialog(tr("Are you sure you want to reset calibration?"), tr("Reset"), callback=reset_calibration)

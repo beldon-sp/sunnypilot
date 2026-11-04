@@ -41,7 +41,10 @@ def read_steering_mode_param(CP: structs.CarParams, CP_SP: structs.CarParamsSP, 
 
 
 def set_alternative_experience(CP: structs.CarParams, CP_SP: structs.CarParamsSP, params: Params):
-  enabled = params.get_bool("Mads")
+  # Plan A: MADS is short-circuited for BYD - the lateral engage/exit runs
+  # entirely on the BYD-enforced engaged gate (cruiseState.enabled ACC-main
+  # latch, byd carstate + byd.h tx hook); the panda MADS machinery stays off.
+  enabled = params.get_bool("Mads") and CP.brand != "byd"
   steering_mode = read_steering_mode_param(CP, CP_SP, params)
 
   if enabled:
