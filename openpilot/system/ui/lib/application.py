@@ -3,6 +3,8 @@ import cffi
 import math
 import os
 import queue
+import select
+import struct
 import time
 import signal
 import sys
@@ -38,6 +40,19 @@ SHOW_FPS = os.getenv("SHOW_FPS") == "1"
 SHOW_TOUCHES = os.getenv("SHOW_TOUCHES") == "1"
 STRICT_MODE = os.getenv("STRICT_MODE") == "1"
 SCALE = float(os.getenv("SCALE", "1.0"))
+
+# comma-three class touch panels expose an MT-B evdev device here. on rootfs
+# images with a weston display stack the raylib comma platform's touch decoder
+# is unusable for widgets: it only tracks MT slots and reports the (-1,-1)
+# no-touch sentinel as the position of release events, so widget clicks (which
+# require the release to land inside the button rect) never fire. reading the
+# panel directly keeps the last valid position on release instead.
+TOUCH_EVENT_DEVICE = os.getenv("TOUCH_EVENT_DEVICE", "/dev/input/by-path/platform-894000.i2c-event")
+_EV_SYN, _EV_KEY, _EV_ABS = 0x00, 0x01, 0x03
+_SYN_REPORT = 0
+_ABS_MT_SLOT, _ABS_MT_TRACKING_ID, _ABS_MT_POSITION_X, _ABS_MT_POSITION_Y = 0x2f, 0x39, 0x35, 0x36
+_BTN_TOUCH = 0x14a
+_EVENT_FMT = "llHHi"
 GRID_SIZE = int(os.getenv("GRID", "0"))
 PROFILE_RENDER = int(os.getenv("PROFILE_RENDER", "0"))
 PROFILE_STATS = int(os.getenv("PROFILE_STATS", "100"))  # Number of functions to show in profile output
@@ -158,8 +173,9 @@ class MouseEvent(NamedTuple):
 
 
 class MouseState:
-  def __init__(self, scale: float = 1.0):
+  def __init__(self, scale: float = 1.0, screen_size: tuple[int, int] = (2160, 1080)):
     self._scale = scale
+    self._screen_w, self._screen_h = screen_size
     self._events: deque[MouseEvent] = deque(maxlen=MOUSE_THREAD_RATE)  # bound event list
     self._prev_mouse_event: list[MouseEvent | None] = [None] * MAX_TOUCH_SLOTS
 
@@ -186,10 +202,97 @@ class MouseState:
       self._thread.join()
 
   def _run_thread(self):
+    if os.path.exists(TOUCH_EVENT_DEVICE):
+      if self._run_evdev_thread():
+        return
     while not self._exit_event.is_set():
       rl.poll_input_events()
       self._handle_mouse_event()
       self._rk.keep_time()
+
+  def _run_evdev_thread(self) -> bool:
+    """Read the touch panel directly (MT-B protocol) instead of raylib."""
+    try:
+      fd = os.open(TOUCH_EVENT_DEVICE, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+      return False
+
+    cloudlog.info(f"touch: reading {TOUCH_EVENT_DEVICE} directly")
+    event_size = struct.calcsize(_EVENT_FMT)
+    slot_raw: dict[int, tuple[int, int]] = {}
+    slot_down: dict[int, bool] = {}
+    last_down: dict[int, bool] = {}
+    last_pos: dict[int, MousePos] = {}
+    cur_slot = 0
+
+    def emit(slot: int, pos: MousePos, pressed: bool, released: bool, down: bool) -> None:
+      ev = MouseEvent(pos, slot, pressed, released, down, time.monotonic())
+      prev = self._prev_mouse_event[slot]
+      if prev is None or ev[:-1] != prev[:-1]:
+        with self._lock:
+          self._events.append(ev)
+        self._prev_mouse_event[slot] = ev
+
+    def flush_frame() -> None:
+      for slot in sorted(set(slot_raw) | set(slot_down) | set(last_down)):
+        down = slot_down.get(slot, False)
+        was_down = last_down.get(slot, False)
+        raw = slot_raw.get(slot)
+        if raw is not None:
+          last_pos[slot] = self._to_screen_pos(*raw)
+        pos = last_pos.get(slot, MousePos(-1.0, -1.0))
+        pressed = down and not was_down
+        released = was_down and not down
+        if raw is None and not released:
+          continue
+        emit(slot, pos, pressed, released, down)
+        last_down[slot] = down
+      for slot in list(slot_raw):
+        if not slot_down.get(slot, False):
+          del slot_raw[slot]
+
+    try:
+      while not self._exit_event.is_set():
+        r, _, _ = select.select([fd], [], [], 1.0 / MOUSE_THREAD_RATE)
+        if not r:
+          continue
+        try:
+          data = os.read(fd, event_size * 64)
+        except BlockingIOError:
+          continue
+        if not data:
+          continue
+
+        for i in range(0, len(data) - event_size + 1, event_size):
+          _, _, etype, ecode, evalue = struct.unpack_from(_EVENT_FMT, data, i)
+          if etype == _EV_SYN and ecode == _SYN_REPORT:
+            flush_frame()
+          elif etype == _EV_ABS:
+            if ecode == _ABS_MT_SLOT:
+              cur_slot = evalue
+            elif ecode == _ABS_MT_TRACKING_ID:
+              slot_down[cur_slot] = evalue >= 0
+            elif ecode == _ABS_MT_POSITION_X:
+              rx, ry = slot_raw.get(cur_slot, (0, 0))
+              slot_raw[cur_slot] = (evalue, ry)
+            elif ecode == _ABS_MT_POSITION_Y:
+              rx, ry = slot_raw.get(cur_slot, (0, 0))
+              slot_raw[cur_slot] = (rx, evalue)
+          elif etype == _EV_KEY and ecode == _BTN_TOUCH:
+            if evalue == 0:
+              for slot in list(slot_down):
+                slot_down[slot] = False
+      return True
+    except Exception:
+      cloudlog.exception("touch: evdev reader failed, falling back to raylib")
+      return False
+    finally:
+      os.close(fd)
+
+  def _to_screen_pos(self, raw_x: int, raw_y: int) -> MousePos:
+    # the panel reports portrait coords (x: 0..1080, y: 0..2160) while the ui
+    # renders landscape (2160x1080) — rotate like the comma raylib platform
+    return MousePos(raw_y / self._scale, (self._screen_h - raw_x) / self._scale)
 
   def _handle_mouse_event(self):
     # TODO: read touch events from evdev directly to get real kernel timestamps.
@@ -251,7 +354,7 @@ class GuiApplication(GuiApplicationExt):
     self._nav_stack_ticks: list[Callable[[], None]] = []
     self._nav_stack_widgets_to_render = 1 if self.big_ui() else 2
 
-    self._mouse = MouseState(self._scale)
+    self._mouse = MouseState(self._scale, screen_size=(self._width, self._height))
     self._mouse_events: list[MouseEvent] = []
     self._last_mouse_event: MouseEvent = MouseEvent(MousePos(0, 0), 0, False, False, False, 0.0)
 
