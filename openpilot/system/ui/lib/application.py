@@ -253,39 +253,50 @@ class MouseState:
 
     try:
       while not self._exit_event.is_set():
-        r, _, _ = select.select([fd], [], [], 1.0 / MOUSE_THREAD_RATE)
-        if not r:
-          continue
         try:
-          data = os.read(fd, event_size * 64)
-        except BlockingIOError:
-          continue
-        if not data:
-          continue
+          r, _, _ = select.select([fd], [], [], 1.0 / MOUSE_THREAD_RATE)
+          if not r:
+            continue
+          try:
+            data = os.read(fd, event_size * 64)
+          except BlockingIOError:
+            continue
+          if not data:
+            continue
 
-        for i in range(0, len(data) - event_size + 1, event_size):
-          _, _, etype, ecode, evalue = struct.unpack_from(_EVENT_FMT, data, i)
-          if etype == _EV_SYN and ecode == _SYN_REPORT:
-            flush_frame()
-          elif etype == _EV_ABS:
-            if ecode == _ABS_MT_SLOT:
-              cur_slot = evalue
-            elif ecode == _ABS_MT_TRACKING_ID:
-              slot_down[cur_slot] = evalue >= 0
-            elif ecode == _ABS_MT_POSITION_X:
-              rx, ry = slot_raw.get(cur_slot, (0, 0))
-              slot_raw[cur_slot] = (evalue, ry)
-            elif ecode == _ABS_MT_POSITION_Y:
-              rx, ry = slot_raw.get(cur_slot, (0, 0))
-              slot_raw[cur_slot] = (rx, evalue)
-          elif etype == _EV_KEY and ecode == _BTN_TOUCH:
-            if evalue == 0:
-              for slot in list(slot_down):
-                slot_down[slot] = False
+          for i in range(0, len(data) - event_size + 1, event_size):
+            _, _, etype, ecode, evalue = struct.unpack_from(_EVENT_FMT, data, i)
+            if etype == _EV_SYN and ecode == _SYN_REPORT:
+              flush_frame()
+            elif etype == _EV_ABS:
+              if ecode == _ABS_MT_SLOT:
+                # this panel class can advertise up to 10 MT slots; widgets only
+                # track the first MAX_TOUCH_SLOTS, so ignore anything beyond them
+                # instead of indexing _prev_mouse_event out of range
+                cur_slot = evalue if evalue < MAX_TOUCH_SLOTS else -1
+              elif cur_slot >= 0:
+                if ecode == _ABS_MT_TRACKING_ID:
+                  slot_down[cur_slot] = evalue >= 0
+                elif ecode == _ABS_MT_POSITION_X:
+                  rx, ry = slot_raw.get(cur_slot, (0, 0))
+                  slot_raw[cur_slot] = (evalue, ry)
+                elif ecode == _ABS_MT_POSITION_Y:
+                  rx, ry = slot_raw.get(cur_slot, (0, 0))
+                  slot_raw[cur_slot] = (rx, evalue)
+            elif etype == _EV_KEY and ecode == _BTN_TOUCH:
+              if evalue == 0:
+                for slot in list(slot_down):
+                  slot_down[slot] = False
+        except Exception:
+          # keep reading: falling back to raylib polling mid-run would report
+          # (-1,-1) touch releases and leave every widget unclickable
+          cloudlog.exception("touch: evdev reader error, resetting state")
+          slot_raw.clear()
+          slot_down.clear()
+          last_down.clear()
+          cur_slot = 0
+          time.sleep(0.1)
       return True
-    except Exception:
-      cloudlog.exception("touch: evdev reader failed, falling back to raylib")
-      return False
     finally:
       os.close(fd)
 
