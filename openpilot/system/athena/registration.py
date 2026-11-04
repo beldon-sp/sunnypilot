@@ -3,7 +3,6 @@ from pathlib import Path
 
 from openpilot.common.params import Params
 from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
-from openpilot.common.hardware import PC
 from openpilot.common.hardware.hw import Paths
 from openpilot.common.swaglog import cloudlog
 
@@ -39,7 +38,9 @@ def register(show_spinner=False) -> str | None:
 
   if dongle_id:
     params.put("DongleId", dongle_id, block=True)
-    set_offroad_alert("Offroad_UnregisteredHardware", (dongle_id == UNREGISTERED_DONGLE_ID) and not PC)
+    # BYD C3L clone: registration is skipped by design, so never surface the
+    # unregistered-hardware alert (also clears any stale one).
+    set_offroad_alert("Offroad_UnregisteredHardware", False)
   return dongle_id
 
 
