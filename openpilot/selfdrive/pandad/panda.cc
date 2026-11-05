@@ -115,10 +115,16 @@ static health_t convert_legacy_health(const legacy_health_t &legacy) {
     (legacy.heartbeat_lost_pkt ? HEALTH_FLAG_HEARTBEAT_LOST : 0U) |
     (legacy.safety_rx_checks_invalid_pkt ? HEALTH_FLAG_SAFETY_RX_CHECKS_INVALID : 0U) |
     (legacy.som_reset_triggered ? HEALTH_FLAG_SOM_RESET_TRIGGERED : 0U);
-  health.car_harness_status_pkt = legacy.car_harness_status_pkt;
+  // clone DOS firmwares can emit garbage bytes in the enum fields below; the
+  // raw value then lands outside the capnp enum range and every Python
+  // to_dict()/__str__ of the message raises "Member was null" (this killed
+  // hardwared's hardware_thread at its first status packet). clamp to the
+  // valid member range: HarnessStatus{notConnected, normal, flipped},
+  // FaultStatus{none, faultTemp, faultPerm}.
+  health.car_harness_status_pkt = legacy.car_harness_status_pkt <= 2U ? legacy.car_harness_status_pkt : 0U;
   health.safety_mode_pkt = legacy.safety_mode_pkt;
   health.safety_param_pkt = legacy.safety_param_pkt;
-  health.fault_status_pkt = legacy.fault_status_pkt;
+  health.fault_status_pkt = legacy.fault_status_pkt <= 2U ? legacy.fault_status_pkt : 0U;
   health.alternative_experience_pkt = legacy.alternative_experience_pkt;
   health.interrupt_load_pkt = (uint8_t)std::clamp(legacy.interrupt_load_pkt * 255.0f, 0.0f, 255.0f);
   health.fan_power = legacy.fan_power;

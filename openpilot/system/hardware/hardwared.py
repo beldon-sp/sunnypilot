@@ -123,6 +123,18 @@ def set_offroad_alert_if_changed(offroad_alert: str, show_alert: bool, extra_tex
 TOUCH_EVENT_DEVICE = "/dev/input/by-path/platform-894000.i2c-event"
 
 
+def safe_reader_to_dict(reader) -> dict:
+  # legacy pandas can publish out-of-range enum values (e.g. the clone DOS
+  # firmware's harness status); capnp raises "Member was null" on to_dict for
+  # those. the status packet is debug data — degrade instead of letting the
+  # exception kill hardware_thread and take deviceState down with it.
+  try:
+    return strip_deprecated_keys(reader.to_dict())
+  except Exception:
+    cloudlog.exception("failed to serialize message for status packet")
+    return {}
+
+
 def touch_thread(end_event):
   count = 0
 
@@ -495,10 +507,10 @@ def hardware_thread(end_event, hw_queue) -> None:
     if rising_edge_started or (count % int(status_packet_interval / DT_HW)) == 0:
       dat = {
         'count': count,
-        'pandaStates': [strip_deprecated_keys(p.to_dict()) for p in pandaStates],
-        'peripheralState': strip_deprecated_keys(peripheralState.to_dict()),
-        'location': (strip_deprecated_keys(sm["gpsLocationExternal"].to_dict()) if sm.alive["gpsLocationExternal"] else None),
-        'deviceState': strip_deprecated_keys(msg.to_dict())
+        'pandaStates': [safe_reader_to_dict(p) for p in pandaStates],
+        'peripheralState': safe_reader_to_dict(peripheralState),
+        'location': (safe_reader_to_dict(sm["gpsLocationExternal"]) if sm.alive["gpsLocationExternal"] else None),
+        'deviceState': safe_reader_to_dict(msg),
       }
       cloudlog.event("STATUS_PACKET", **dat)
 
