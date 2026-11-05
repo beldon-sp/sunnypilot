@@ -9,8 +9,8 @@ from openpilot.cereal import log, custom
 from opendbc.car.structs import car
 
 from openpilot.common.params import Params
-from openpilot.common.raw_params import get_float_param
-from opendbc.car.byd.radar_interface import RADAR_DIST_SCALE_DEFAULT, SLOT_TABLE_LEVEL_MAX
+from openpilot.common.raw_params import get_float_param, get_int_param
+from opendbc.car.byd.radar_interface import RADAR_DIST_SCALE_DEFAULT, SLOT_TABLE_DEFAULT, SLOT_TABLE_LEVEL_MAX
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper
 from openpilot.common.swaglog import cloudlog, ForwardingHandler
 
@@ -144,7 +144,7 @@ class Car:
     if self.CP.brand == "byd" and self.RI is not None and hasattr(self.RI, "radar_dist_scale"):
       self.RI.radar_dist_scale = get_float_param(self.params, "BydRadarDistScale", RADAR_DIST_SCALE_DEFAULT)
       self.RI.slot_table_level = min(SLOT_TABLE_LEVEL_MAX,
-                                     max(0, self.params.get_int("BydRadarSlotTable")))
+                                     max(0, get_int_param(self.params, "BydRadarSlotTable", SLOT_TABLE_DEFAULT)))
 
     openpilot_enabled_toggle = self.params.get_bool("OpenpilotEnabledToggle")
     controller_available = self.CI.CC is not None and openpilot_enabled_toggle and not self.CP.dashcamOnly
