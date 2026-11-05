@@ -130,10 +130,15 @@ def _process_font(font_path: Path, codepoints: tuple[int, ...], output_name: str
   cp_buffer = rl.ffi.new("int[]", codepoints)
   cp_ptr = rl.ffi.cast("int *", cp_buffer)
   glyph_count = rl.ffi.new("int *", len(codepoints))
-  glyphs = rl.load_font_data(
-    rl.ffi.cast("unsigned char *", file_buf), len(data), font_size, cp_ptr, len(codepoints),
-    rl.FontType.FONT_DEFAULT, glyph_count
-  )
+  common_args = (rl.ffi.cast("unsigned char *", file_buf), len(data), font_size, cp_ptr, len(codepoints))
+  try:
+    # raylib 6.x: glyph count is an out-parameter (glyphs missing from the font are dropped)
+    glyphs = rl.load_font_data(*common_args, rl.FontType.FONT_DEFAULT, glyph_count)
+  except TypeError:
+    # carrot AGNOS venv ships pyray on raylib 5.5, whose binding has no glyphCount
+    # out-param: it returns one glyph per requested codepoint, count == codepointCount
+    glyphs = rl.load_font_data(*common_args, rl.FontType.FONT_DEFAULT)
+    glyph_count[0] = len(codepoints)
   if glyphs == rl.ffi.NULL:
     raise RuntimeError("raylib failed to load font data")
 
