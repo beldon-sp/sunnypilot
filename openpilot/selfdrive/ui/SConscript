@@ -1,7 +1,30 @@
 import importlib.util
+import json
 from pathlib import Path
 
 Import('env', 'arch', 'common')
+
+# bake OpFont bitmap atlases (per weight × language) used for CJK rendering;
+# Latin-language fonts stay runtime-loaded TTFs (see assets/fonts/process.py)
+generator = File("#openpilot/selfdrive/assets/fonts/process.py")
+languages_file = File("#openpilot/selfdrive/ui/translations/languages.json")
+opfonts = [f for f in Glob("#openpilot/selfdrive/assets/fonts/*.otf") if Path(f.path).stem.startswith("OpFont")]
+
+with open(languages_file.abspath, encoding="utf-8") as f:
+  lang_codes = list(json.load(f).values())
+
+output_files = []
+for f in opfonts:
+  base = Path(f.path).with_suffix('')
+  output_files.extend([f"#{base}-Labels.fnt", f"#{base}-Labels.png"])
+  for code in lang_codes:
+    output_files.extend([f"#{base}-{code}.fnt", f"#{base}-{code}.png"])
+
+env.Command(
+  target=output_files,
+  source=[generator, opfonts, languages_file],
+  action=f"python3 {generator}",
+)
 
 if GetOption('extras') and arch == "comma_arm64":
   # build installers

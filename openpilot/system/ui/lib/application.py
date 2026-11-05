@@ -3,6 +3,7 @@ import cffi
 import math
 import os
 import queue
+import re
 import select
 import struct
 import time
@@ -21,10 +22,50 @@ from typing import NamedTuple
 from importlib.resources import as_file, files
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.hardware import HARDWARE, PC
-from openpilot.system.ui.lib.multilang import FONT_FALLBACK_LANGUAGES, TRANSLATIONS_DIR, multilang
+from openpilot.system.ui.lib.multilang import TRANSLATIONS_DIR, multilang
 from openpilot.common.realtime import Ratekeeper
 
 from openpilot.system.ui.sunnypilot.lib.application import GuiApplicationExt
+
+
+# Newer AGNOS images ship a pyray/raylib build without raygui compiled in, so
+# the raygui global font/style bindings are absent. This UI draws every string
+# through its own widgets with an explicit font (draw_text_ex), so raygui's
+# global font and default style are not actually needed. Provide no-op shims so
+# startup (_load_fonts/_set_styles) keeps working on both images instead of
+# dying with "module 'pyray' has no attribute 'gui_set_font'".
+def _raygui_available() -> bool:
+  return all(hasattr(rl, name) for name in ("gui_set_font", "gui_get_font", "gui_set_style"))
+
+
+def gui_set_font(font) -> None:
+  fn = getattr(rl, "gui_set_font", None)
+  if fn is not None:
+    fn(font)
+
+
+def gui_get_font():
+  fn = getattr(rl, "gui_get_font", None)
+  return fn() if fn is not None else None
+
+
+def gui_set_style(control, prop, value) -> None:
+  fn = getattr(rl, "gui_set_style", None)
+  if fn is not None:
+    fn(control, prop, value)
+
+
+# Some drawing call sites still reference raygui's text-alignment enums
+# (rl.GuiTextAlignment / rl.GuiTextAlignmentVertical). Inject the fixed raygui
+# enum values into the pyray module when raygui is absent so those call sites
+# work unchanged on new AGNOS images. Values are the raygui ABI constants.
+if not all(hasattr(rl, name) for name in ("GuiTextAlignment", "GuiTextAlignmentVertical")):
+  for _name, _members in (
+    ("GuiTextAlignment", (("TEXT_ALIGN_LEFT", 0), ("TEXT_ALIGN_CENTER", 1), ("TEXT_ALIGN_RIGHT", 2))),
+    ("GuiTextAlignmentVertical", (("TEXT_ALIGN_TOP", 0), ("TEXT_ALIGN_MIDDLE", 1), ("TEXT_ALIGN_BOTTOM", 2))),
+  ):
+    if not hasattr(rl, _name):
+      setattr(rl, _name, IntEnum(_name, _members))
 
 _DEFAULT_FPS = int(os.getenv("FPS", {'tizi': 20}.get(HARDWARE.get_device_type(), 60)))
 FPS_LOG_INTERVAL = 5  # Seconds between logging FPS drops
@@ -111,11 +152,11 @@ ASSETS_DIR = files("openpilot.selfdrive").joinpath("assets")
 FONT_DIR = ASSETS_DIR.joinpath("fonts")
 EXTRA_FONT_CHARS = "–‑✓×°§•X⚙✕◀▶✔⌫⇧␣○●↳çêüñ–‑✓×°§•€£¥"
 NOTO_FONTS = {
-  "ja": "NotoSansCJKjp-Regular.otf",
-  "ko": "NotoSansCJKkr-Regular.otf",
+  "ja": "OpFont-Regular.otf",
+  "ko": "OpFont-Regular.otf",
   "th": "NotoSansThai-Regular.ttf",
-  "zh-CHS": "NotoSansCJKsc-Regular.otf",
-  "zh-CHT": "NotoSansCJKtc-Regular.otf",
+  "zh-CHS": "OpFont-Regular.otf",
+  "zh-CHT": "OpFont-Regular.otf",
 }
 
 
@@ -124,13 +165,34 @@ class FontWeight(StrEnum):
   MEDIUM = "Inter-Medium.ttf"
   BOLD = "Inter-Bold.ttf"
   SEMI_BOLD = "Inter-SemiBold.ttf"
-  UNIFONT = "unifont.otf"
+  UNIFONT = "OpFont-Regular-Labels.fnt"
   AUDIOWIDE = "Audiowide-Regular.ttf"
 
   # Small UI fonts
   DISPLAY_REGULAR = "Inter-Regular.ttf"
   ROMAN = "Inter-Regular.ttf"
   DISPLAY = "Inter-Bold.ttf"
+
+
+# Keys match FontWeight values (.ttf); maps each weight to the equivalent OpFont
+# weight used for the per-language pre-baked atlases.
+_OPFONT_WEIGHT = {
+  "Inter-Light.ttf": "Regular",
+  "Inter-Regular.ttf": "Regular",
+  "Inter-Medium.ttf": "Medium",
+  "Inter-SemiBold.ttf": "SemiBold",
+  "Inter-Bold.ttf": "Bold",
+}
+
+
+def _opfont_filename(inter_filename: str, lang_code: str) -> str:
+  """Map an Inter font filename to the equivalent OpFont filename for a language."""
+  weight_name = _OPFONT_WEIGHT.get(inter_filename, "Regular")
+  return f"OpFont-{weight_name}-{lang_code}.fnt"
+
+
+_NON_LATIN_RE = re.compile(r"[฀-๿ᄀ-ᇿ⺀-㆏㐀-鿿가-힯豈-﫿︰-﹏＀-￯]")
+FALLBACK_ATLAS_MAX_CODEPOINTS = 2000
 
 
 class TextAlignment(IntEnum):
@@ -145,9 +207,14 @@ class TextAlignmentVertical(IntEnum):
   BOTTOM = 2
 
 
-def font_fallback(font: rl.Font) -> rl.Font:
+def font_fallback(font: rl.Font, text: str = "") -> rl.Font:
   """Use a Noto fallback for languages not covered by Inter."""
+  # A widget may have cached a Font whose atlas was unloaded by a language switch; resolve it
+  # to the live font of the same weight first, otherwise the stale object renders nothing.
+  font = gui_app.current_font(font)
   if multilang.requires_font_fallback():
+    if text and not _NON_LATIN_RE.search(text):
+      return font
     return gui_app.fallback_font()
   return font
 
@@ -335,7 +402,21 @@ class GuiApplication(GuiApplicationExt):
     self._set_log_callback()
 
     self._fonts: dict[FontWeight, rl.Font] = {}
+    # Python object id -> weight for every Font handed to a widget. Widgets cache the Font
+    # object at construction time (self._font = gui_app.font(...)); after a language switch
+    # the old atlas is unloaded, so those cached objects go stale. current_font() resolves a
+    # stale font back to the *live* font of the same weight via this map.
+    self._weight_by_object: dict[int, FontWeight] = {}
     self._fallback_fonts: dict[str, rl.Font] = {}
+    self._fallback_chars: dict[str, set[str]] = {}
+    self._fallback_pending: set[str] = set()
+    # language switch is requested from a click callback *during* a draw, but swapping
+    # font atlases mid-draw invalidates the bound GL textures (black / blank text until
+    # a restart). Defer the actual font rebuild to between frames.
+    self._pending_language: str | None = None
+    # Baking an atlas costs 108-233 ms on tizi against a 50 ms frame budget, so it is only
+    # ever allowed off-road. Onroad the queue just accumulates and unbaked glyphs draw as '?'.
+    self.allow_font_rebake: bool = True
     self._width = width if width is not None else GuiApplication._default_width()
     self._height = height if height is not None else GuiApplication._default_height()
 
@@ -747,6 +828,10 @@ class GuiApplication(GuiApplicationExt):
           yield False, 0.0, 0.0
           continue
 
+        # Between frames only: swapping the atlas mid-draw would invalidate a bound texture.
+        self._apply_pending_language()
+        self._rebake_pending_fallback()
+
         if self._render_texture:
           rl.begin_texture_mode(self._render_texture)
           rl.clear_background(rl.BLACK)
@@ -818,22 +903,141 @@ class GuiApplication(GuiApplicationExt):
       pass
 
   def font(self, font_weight: FontWeight = FontWeight.NORMAL) -> rl.Font:
+    if font_weight not in self._fonts:
+      # For languages that need unifont, load OpFont instead of Inter (except labels font)
+      active_lang = getattr(self, "_active_lang_code", multilang.language)
+      if multilang.requires_font_fallback() and font_weight != FontWeight.UNIFONT:
+        filename = _opfont_filename(font_weight.value, active_lang)
+      else:
+        filename = font_weight.value
+      with as_file(FONT_DIR) as fspath:
+        fnt_path = fspath / filename
+        # Fall back to Regular weight if requested weight doesn't exist
+        if not fnt_path.exists() and multilang.requires_font_fallback():
+          filename = f"OpFont-Regular-{active_lang}.fnt"
+          fnt_path = fspath / filename
+        if fnt_path.exists():
+          font = rl.load_font(fnt_path.as_posix())
+          default_id = rl.get_font_default().texture.id
+          if font.texture.id <= 0 or font.texture.id == default_id:
+            cloudlog.error(f"Failed to load pre-baked font {filename}; texture id={font.texture.id}")
+            if multilang.requires_font_fallback():
+              cloudlog.warning(f"Baking CJK fallback for {active_lang} from {NOTO_FONTS[active_lang]}")
+              font = self._load_or_bake_cjk_font(active_lang)
+        elif multilang.requires_font_fallback():
+          # Pre-baked OpFont atlas is missing (e.g. first install before scons runs).
+          # Bake the CJK font on-demand from the source TTF/OTF so the UI remains usable.
+          cloudlog.warning(f"OpFont atlas missing for {active_lang}; baking fallback from {NOTO_FONTS[active_lang]}")
+          font = self._load_or_bake_cjk_font(active_lang)
+        else:
+          font = rl.load_font(fnt_path.as_posix())
+        rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
+        self._fonts[font_weight] = font
+        self._weight_by_object[id(font)] = font_weight
     return self._fonts[font_weight]
 
-  def fallback_font(self) -> rl.Font:
+  def current_font(self, font: rl.Font) -> rl.Font:
+    """Resolve a possibly stale Font (cached by a widget before a language switch) to the
+    live font of the same weight. Old atlases are unloaded on switch, so drawing/measuring
+    with a cached object renders nothing; this keeps those references valid transparently."""
+    weight = self._weight_by_object.get(id(font))
+    if weight is None:
+      return font  # not one of our weight fonts (e.g. a baked CJK fallback)
+    return self._fonts.get(weight, font)
+
+  def _load_or_bake_cjk_font(self, language: str) -> rl.Font:
+    """Return a ready-to-use CJK font when the pre-baked OpFont atlas is absent.
+
+    The atlas is built from the language's .po translation plus ASCII and common
+    UI symbols, matching the character set used by the normal fallback path.
+    """
+    chars = set(map(chr, range(32, 127))) | set(EXTRA_FONT_CHARS)
+    try:
+      chars.update(TRANSLATIONS_DIR.joinpath(f"app_{language}.po").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+      cloudlog.error(f"No translation file found for language: {language}")
+    return self._bake_fallback_font(language, chars)
+
+  def _bake_fallback_font(self, language: str, chars: set[str]) -> rl.Font:
+    codepoints = sorted(map(ord, chars))
+    codepoint_buffer = rl.ffi.new("int[]", codepoints)
+    with as_file(FONT_DIR) as fspath:
+      font = rl.load_font_ex((fspath / NOTO_FONTS[language]).as_posix(), 48,
+                             rl.ffi.cast("int *", codepoint_buffer), len(codepoints))
+    rl.gen_texture_mipmaps(font.texture)
+    rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_TRILINEAR)
+    return font
+
+  def fallback_font(self, text: str = "") -> rl.Font:
     language = multilang.language
     if language not in self._fallback_fonts:
       chars = set(map(chr, range(32, 127))) | set(EXTRA_FONT_CHARS)
       chars.update(TRANSLATIONS_DIR.joinpath(f"app_{language}.po").read_text(encoding="utf-8"))
-      codepoints = sorted(map(ord, chars))
-      codepoint_buffer = rl.ffi.new("int[]", codepoints)
-      with as_file(FONT_DIR) as fspath:
-        font = rl.load_font_ex((fspath / NOTO_FONTS[language]).as_posix(), 48,
-                               rl.ffi.cast("int *", codepoint_buffer), len(codepoints))
-      rl.gen_texture_mipmaps(font.texture)
-      rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_TRILINEAR)
-      self._fallback_fonts[language] = font
+      self._fallback_chars[language] = chars
+      self._fallback_fonts[language] = self._bake_fallback_font(language, chars)
+
+    baked = self._fallback_chars[language]
+    for char in text:
+      if char not in baked:
+        self._fallback_pending.add(char)
+
     return self._fallback_fonts[language]
+
+  def _rebake_pending_fallback(self) -> None:
+    # imported here: both modules import font_fallback from this one
+    from openpilot.system.ui.lib import text_measure, wrap_text
+
+    if not self._fallback_pending or not self.allow_font_rebake:
+      # Onroad: leave the queue alone so these glyphs get baked next time we are parked.
+      return
+
+    pending, self._fallback_pending = self._fallback_pending, set()
+    language = multilang.language
+    baked = self._fallback_chars.get(language)
+    if baked is None:
+      return
+
+    # Record every queued codepoint as seen even when it cannot be baked, otherwise a
+    # character the font has no glyph for re-queues itself on every frame.
+    chars = baked | pending
+    self._fallback_chars[language] = chars
+    if len(chars) > FALLBACK_ATLAS_MAX_CODEPOINTS:
+      cloudlog.warning(f"fallback atlas at ceiling ({len(baked)} codepoints), not baking {len(pending)} new ones")
+      return
+
+    old_font = self._fallback_fonts[language]
+    try:
+      font = self._bake_fallback_font(language, chars)
+    except Exception:
+      # Keep drawing with the old atlas; manager does not restart a crashed ui.
+      cloudlog.exception("failed to grow fallback atlas")
+      return
+
+    # load_font_ex hands back the default font instead of raising when it cannot load,
+    # so a bare try/except would swap in that stub and free the atlas that still works.
+    default_id = rl.get_font_default().texture.id
+    if font.texture.id <= 0 or font.texture.id == default_id:
+      cloudlog.error("fallback atlas bake produced an invalid font, keeping the old one")
+      if font.texture.id > 0 and font.texture.id != default_id:
+        rl.unload_font(font)
+      return
+
+    # raygui stores the Font by value, so a copy of old_font outlives the unload below.
+    # Without raygui (new AGNOS) there is no global font to keep in sync; widgets set
+    # their own font explicitly on every draw_text_ex, so just skip the global swap.
+    current_gui_font = gui_get_font()
+    if current_gui_font is not None and current_gui_font.texture.id == old_font.texture.id:
+      gui_set_font(font)
+
+    self._fallback_fonts[language] = font
+    rl.unload_font(old_font)
+
+    # Both caches key on font.texture.id, which raylib recycles: stale entries from a freed
+    # atlas would collide with the new one and hand back widths measured against '?' glyphs.
+    text_measure.clear_cache()
+    wrap_text.clear_cache()
+
+    cloudlog.debug(f"fallback atlas grew to {len(chars)} codepoints (+{len(pending)})")
 
   @property
   def width(self):
@@ -844,26 +1048,41 @@ class GuiApplication(GuiApplicationExt):
     return self._height
 
   def _load_fonts(self):
-    base_chars = set(map(chr, range(32, 127))) | set(EXTRA_FONT_CHARS)
-    unifont_chars = set(base_chars)
-    for language, code in multilang.languages.items():
-      unifont_chars.update(language)
-      if code not in FONT_FALLBACK_LANGUAGES:
-        base_chars.update(TRANSLATIONS_DIR.joinpath(f"app_{code}.po").read_text(encoding="utf-8"))
+    # Lazy, language-aware font loading. Set the active language then load
+    # the NORMAL weight via font(), which picks OpFont (CJK-capable) over Inter
+    # when the current language requires unifont. Loading all weights eagerly
+    # here would bypass font()'s OpFont selection and render tofu for non-Latin
+    # languages at startup.
+    self._active_lang_code = multilang.language
+    gui_set_font(self.font(FontWeight.NORMAL))
 
-    for font_weight_file in FontWeight:
-      with as_file(FONT_DIR) as fspath:
-        unifont = font_weight_file == FontWeight.UNIFONT
-        codepoints = sorted(map(ord, unifont_chars if unifont else base_chars))
-        codepoint_buffer = rl.ffi.new("int[]", codepoints)
-        font = rl.load_font_ex((fspath / font_weight_file).as_posix(), 16 if unifont else 200,
-                               rl.ffi.cast("int *", codepoint_buffer), len(codepoints))
-        if font_weight_file != FontWeight.UNIFONT:
-          rl.gen_texture_mipmaps(font.texture)
-          rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_TRILINEAR)
-        self._fonts[font_weight_file] = font
-    if multilang.requires_font_fallback():
-      self.fallback_font()
+  def on_language_changed(self, lang_code: str):
+    # Called from a click callback while a frame is being drawn. Only record the request;
+    # the font atlases are rebuilt between frames (_apply_pending_language) to avoid
+    # swapping GL font textures mid-draw, which leaves the screen black / textless until reboot.
+    self._pending_language = lang_code
+
+  def _apply_pending_language(self) -> None:
+    lang_code = self._pending_language
+    if lang_code is None:
+      return
+    self._pending_language = None
+
+    # Reload the same weights for the new language
+    old_weights = list(self._fonts.keys())
+    old_fonts = list(self._fonts.values())
+    self._fonts = {}
+    self._active_lang_code = lang_code
+    for weight in old_weights:
+      self.font(weight)
+    # Now safe to unload old fonts. Any widget still holding one of these objects is
+    # transparently remapped to the new same-weight font via current_font()/font_fallback().
+    for f in old_fonts:
+      rl.unload_font(f)
+    gui_set_font(self.font(FontWeight.NORMAL))
+    from openpilot.system.ui.lib import text_measure, wrap_text
+    text_measure._cache.clear()
+    wrap_text._cache.clear()
 
   def _patch_text_functions(self):
     # Wrap pyray text APIs to apply a global text size scale so our px sizes match Qt
@@ -871,8 +1090,9 @@ class GuiApplication(GuiApplicationExt):
       rl._orig_draw_text_ex = rl.draw_text_ex
 
     def _draw_text_ex_scaled(font, text, position, font_size, spacing, tint):
-      font = font_fallback(font)
-      return rl._orig_draw_text_ex(font, text, position, font_size * FONT_SCALE, spacing, tint)
+      font = font_fallback(font, text)
+      from openpilot.system.ui.lib.emoji import draw_text_with_emojis
+      return draw_text_with_emojis(font, text, position, font_size, spacing, tint)
 
     rl.draw_text_ex = _draw_text_ex_scaled
 
