@@ -132,7 +132,10 @@ class MultipleButtonActionSP(MultipleButtonAction):
     self.param_key = param
     self.params = Params()
     if self.param_key:
-      self.selected_button = int(self.params.get(self.param_key, return_default=True))
+      # Unregistered params read back None (no registered default); fall back to the
+      # caller-provided selected_index instead of crashing on int(None).
+      val = self.params.get(self.param_key, return_default=True)
+      self.selected_button = int(val) if val is not None else selected_index
     self._anim_x: float | None = None
     self.enabled_buttons: set[int] | None = None
 
