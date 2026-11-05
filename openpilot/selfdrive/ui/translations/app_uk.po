@@ -261,6 +261,22 @@ msgstr ""
 msgid "BRAKE!"
 msgstr ""
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "BYD Blinker Stalk Swap"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "BYD Forward Gap Gate"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "BYD Radar Distance Scale"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "BYD Radar Slot Table"
+msgstr ""
+
 #: openpilot/selfdrive/ui/layouts/onboarding.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/onboarding.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_policy.py
@@ -1137,6 +1153,10 @@ msgstr "Злива"
 msgid "Firehose Mode"
 msgstr "Режим зливи"
 
+#: openpilot/selfdrive/selfdrived/events.py
+msgid "Firmware rejects ACC_CMD - reflash or disable AlphaLongitudinal"
+msgstr ""
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
 msgid "Fixed"
 msgstr ""
@@ -1388,9 +1408,17 @@ msgid "Long Press Increment"
 msgstr ""
 
 #: openpilot/selfdrive/selfdrived/events.py
+msgid "Longitudinal Firmware Missing"
+msgstr ""
+
+#: openpilot/selfdrive/selfdrived/events.py
 #: openpilot/selfdrive/ui/layouts/settings/developer.py
 msgid "Longitudinal Maneuver Mode"
 msgstr "Режим поздовжнього маневрування"
+
+#: openpilot/selfdrive/selfdrived/events.py
+msgid "Longitudinal firmware missing"
+msgstr ""
 
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Low Communication Rate Between Processes"
@@ -1927,6 +1955,10 @@ msgstr "Запис та завантаження аудіо з мікрофон�
 #: openpilot/selfdrive/ui/layouts/settings/toggles.py
 msgid "Record and store microphone audio while driving. The audio will be included in the dashcam video in comma connect."
 msgstr "Записуйте та зберігайте аудіо з мікрофона під час руху. Аудіо буде включено до відео з відеореєстратора в comma connect."
+
+#: openpilot/selfdrive/selfdrived/events.py
+msgid "Reflash the byd panda bin or disable AlphaLongitudinal"
+msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 msgid "Refresh Model List"
@@ -2596,6 +2628,12 @@ msgstr ""
 
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Turn Exceeds Steering Limit"
+msgstr ""
+
+#: openpilot/selfdrive/ui/layouts/settings/device.py
+msgid ""
+"Turn off the car to reset calibration.\n"
+"BYD's EPS latches an LKAS fault if openpilot restarts while powered."
 msgstr ""
 
 #: openpilot/sunnypilot/selfdrive/selfdrived/events.py
