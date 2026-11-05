@@ -113,6 +113,11 @@ class SelfdriveD:
     if REPLAY:
       # no vipc in replay will make them ignored anyways
       ignore += ['narrowRoadCameraState', 'wideRoadCameraState']
+    # cabin camera and driver monitoring are disabled on hardware without one (C3L clone, DISABLE_DRIVER in launch_env.sh):
+    # their services never publish, and an explicit all_alive/all_checks over camera_packets would permanently raise
+    # cameraMalfunction and block engagement.
+    if os.getenv("DISABLE_DRIVER") is not None:
+      ignore += ['cabinCameraState', 'driverMonitoringState']
     self.sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'extrinsicsCalibration',
                                    'carOutput', 'driverMonitoringState', 'longitudinalPlan', 'deviceMotion', 'lateralDelay',
                                    'managerState', 'vehicleParameters', 'radarState', 'lateralTorqueParameters',
