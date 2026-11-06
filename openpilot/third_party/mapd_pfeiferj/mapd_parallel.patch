@@ -1,0 +1,302 @@
+diff --git a/download.go b/download.go
+index 9dd3266..21bde1f 100644
+--- a/download.go
++++ b/download.go
+@@ -11,6 +11,9 @@ import (
+ 	"net/http"
+ 	"os"
+ 	"path/filepath"
++	"strconv"
++	"strings"
++	"sync"
+ 
+ 	"github.com/pkg/errors"
+ 	"github.com/rs/zerolog/log"
+@@ -189,87 +192,149 @@ func adjustedBounds(bounds Bounds) (int, int, int, int) {
+ 	return minLat, minLon, maxLat, maxLon
+ }
+ 
+-func DownloadBounds(bounds Bounds, locationName string) (err error) {
+-	log.Info().Msgf("Downloading Bounds: %f, %f, %f, %f\n", bounds.MinLat, bounds.MinLon, bounds.MaxLat, bounds.MaxLon)
++// downloadConcurrency returns the number of parallel tile downloads, read from the
++// OSMDownloadConcurrency param (default 4, clamped to 1..16). Tile downloads used to run strictly
++// sequentially, which over a high-latency link (map-data.pfeifer.dev is Cloudflare-fronted, every
++// tile is an origin hit) wastes most of the available bandwidth on a single stream.
++func downloadConcurrency() int {
++	n := 4
++	if b, err := GetParam(DOWNLOAD_CONCURRENCY); err == nil && len(b) > 0 {
++		if parsed, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
++			n = parsed
++		}
++	}
++	if n < 1 {
++		n = 1
++	}
++	if n > 16 {
++		n = 16
++	}
++	return n
++}
+ 
+-	// clip given bounds to file areas
+-	minLat, minLon, maxLat, maxLon := adjustedBounds(bounds)
+-	progress.LocationDetails[locationName].TotalFiles = countFilesForBounds(bounds)
++// downloadTile downloads one archive tile and extracts it in place. Returns true when the tile was
++// fully downloaded AND extracted. Mirrors the original per-tile logic (download -> extract ->
++// remove tmp archive -> bump progress) with the log-and-continue error semantics kept intact.
++func downloadTile(i int, j int, locationName string, progressMu *sync.Mutex) bool {
++	filename := fmt.Sprintf("offline/%d/%d.tar.gz", i, j)
++	url := fmt.Sprintf("https://map-data.pfeifer.dev/%s", filename)
++	outputName := filepath.Join(GetBaseOpPath(), "tmp", filename)
++	err := os.MkdirAll(filepath.Dir(outputName), 0o775)
++	logde(errors.Wrap(err, "failed to make output directory"))
++	err = DownloadFile(url, outputName)
++	if err != nil {
++		logwe(errors.Wrap(err, "failed to download file, continuing to next"))
++		return false
++	}
++	file, err := os.Open(outputName)
++	if err != nil {
++		logde(errors.Wrap(err, "failed to open downloaded file"))
++		return false
++	}
++	reader, err := gzip.NewReader(file)
++	if err != nil {
++		logde(errors.Wrap(err, "failed to read downloaded gzip"))
++		file.Close()
++		return false
++	}
++	tr := tar.NewReader(reader)
++	for {
++		header, err := tr.Next()
++		if err != nil {
++			break
++		}
+ 
+-	for i := minLat; i < maxLat; i += GROUP_AREA_BOX_DEGREES {
+-		for j := minLon; j < maxLon; j += GROUP_AREA_BOX_DEGREES {
+-			filename := fmt.Sprintf("offline/%d/%d.tar.gz", i, j)
+-			url := fmt.Sprintf("https://map-data.pfeifer.dev/%s", filename)
+-			outputName := filepath.Join(GetBaseOpPath(), "tmp", filename)
+-			err := os.MkdirAll(filepath.Dir(outputName), 0o775)
+-			logde(errors.Wrap(err, "failed to make output directory"))
+-			err = DownloadFile(url, outputName)
++		// if the header is nil, just skip it (not sure how this happens)
++		if header == nil {
++			continue
++		}
++		// the target location where the dir/file should be created
++		target := filepath.Join(GetBaseOpPath(), header.Name)
++		// check the file type
++		switch header.Typeflag {
++
++		// if its a dir and it doesn't exist create it
++		case tar.TypeDir:
++			if _, err := os.Stat(target); err != nil {
++				err := os.MkdirAll(target, 0o755)
++				logde(errors.Wrap(err, "could not create directory from zip"))
++			}
++
++		// if it's a file create it
++		case tar.TypeReg:
++			f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
+ 			if err != nil {
+-				logwe(errors.Wrap(err, "failed to download file, continuing to next"))
++				logde(errors.Wrap(err, "could not open file target for unzipped file"))
+ 				continue
+ 			}
+-			file, err := os.Open(outputName)
+-			logde(errors.Wrap(err, "failed to open downloaded file"))
+-			reader, err := gzip.NewReader(file)
+-			logde(errors.Wrap(err, "failed to read downloaded gzip"))
+-			tr := tar.NewReader(reader)
+-			for {
+-				header, err := tr.Next()
+-				if err != nil {
+-					break
+-				}
+ 
+-				// if the header is nil, just skip it (not sure how this happens)
+-				if header == nil {
+-					continue
+-				}
+-				// the target location where the dir/file should be created
+-				target := filepath.Join(GetBaseOpPath(), header.Name)
+-				// check the file type
+-				switch header.Typeflag {
+-
+-				// if its a dir and it doesn't exist create it
+-				case tar.TypeDir:
+-					if _, err := os.Stat(target); err != nil {
+-						err := os.MkdirAll(target, 0o755)
+-						logde(errors.Wrap(err, "could not create directory from zip"))
+-					}
++			_, err = io.Copy(f, tr)
++			logde(errors.Wrap(err, "could not write unzipped data to target file"))
+ 
+-				// if it's a file create it
+-				case tar.TypeReg:
+-					f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
+-					logde(errors.Wrap(err, "could not open file target for unzipped file"))
++			err = f.Sync()
++			logde(errors.Wrap(err, "could not fsync unzipped target file"))
++			f.Close()
++		}
++	}
++	err = reader.Close()
++	logde(errors.Wrap(err, "could not close gzip reader"))
++	err = file.Close()
++	logde(errors.Wrap(err, "could not close downloaded file"))
+ 
+-					_, err = io.Copy(f, tr)
+-					logde(errors.Wrap(err, "could not write unzipped data to target file"))
++	err = os.Remove(outputName)
++	logde(errors.Wrap(err, "could not delete downloaded gzip file"))
+ 
+-					err = f.Sync()
+-					logde(errors.Wrap(err, "could not fsync unzipped target file"))
+-					f.Close()
+-				}
+-			}
+-			err = reader.Close()
+-			logde(errors.Wrap(err, "could not close gzip reader"))
+-			err = file.Close()
+-			logde(errors.Wrap(err, "could not close downloaded file"))
++	progressMu.Lock()
++	defer progressMu.Unlock()
++	progress.DownloadedFiles++
++	progress.LocationDetails[locationName].DownloadedFiles++
+ 
+-			err = os.Remove(outputName)
+-			logde(errors.Wrap(err, "could not delete downloaded gzip file"))
++	progressData, err := json.Marshal(progress)
++	if err != nil {
++		logde(errors.Wrap(err, "could not marshal download progress"))
++	}
+ 
+-			progress.DownloadedFiles++
+-			progress.LocationDetails[locationName].DownloadedFiles++
++	err = PutParam(DOWNLOAD_PROGRESS, progressData)
++	if err != nil {
++		logwe(errors.Wrap(err, "could not write download progress"))
++	}
++	return true
++}
+ 
+-			progressData, err := json.Marshal(progress)
+-			if err != nil {
+-				logde(errors.Wrap(err, "could not marshal download progress"))
+-			}
++func DownloadBounds(bounds Bounds, locationName string) (err error) {
++	log.Info().Msgf("Downloading Bounds: %f, %f, %f, %f\n", bounds.MinLat, bounds.MinLon, bounds.MaxLat, bounds.MaxLon)
+ 
+-			err = PutParam(DOWNLOAD_PROGRESS, progressData)
+-			if err != nil {
+-				logwe(errors.Wrap(err, "could not write download progress"))
++	// clip given bounds to file areas
++	minLat, minLon, maxLat, maxLon := adjustedBounds(bounds)
++	progress.LocationDetails[locationName].TotalFiles = countFilesForBounds(bounds)
++
++	// workers pull (i, j) tile coordinates from this channel
++	type tileJob struct {
++		i, j int
++	}
++	jobs := make(chan tileJob)
++	var wg sync.WaitGroup
++	var progressMu sync.Mutex
++
++	workerCount := downloadConcurrency()
++	for w := 0; w < workerCount; w++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			for job := range jobs {
++				downloadTile(job.i, job.j, locationName, &progressMu)
+ 			}
++		}()
++	}
++
++	for i := minLat; i < maxLat; i += GROUP_AREA_BOX_DEGREES {
++		for j := minLon; j < maxLon; j += GROUP_AREA_BOX_DEGREES {
++			jobs <- tileJob{i: i, j: j}
+ 		}
+ 	}
++	close(jobs)
++	wg.Wait()
++
+ 	err = os.RemoveAll(filepath.Join(GetBaseOpPath(), "tmp"))
+ 	logde(errors.Wrap(err, "could not remove temp download directory"))
+ 
+diff --git a/download_test.go b/download_test.go
+new file mode 100644
+index 0000000..077751a
+--- /dev/null
++++ b/download_test.go
+@@ -0,0 +1,55 @@
++package main
++
++import (
++	"os"
++	"path/filepath"
++	"strconv"
++	"testing"
++	"time"
++)
++
++// TestDownloadBoundsParallel is a live-network test: it downloads the 2-degree tile grid around
++// Sacramento/Sierra (mostly land, so real HTTP 200s) and asserts every expected tile directory got
++// extracted files. Run with: go test -run TestDownloadBoundsParallel -v
++func TestDownloadBoundsParallel(t *testing.T) {
++	if testing.Short() {
++		t.Skip("network test")
++	}
++	t.Cleanup(func() {
++		_ = os.RemoveAll("tmp")
++		_ = os.RemoveAll(filepath.Join(GetBaseOpPath(), "offline"))
++	})
++
++	// DownloadIfTriggered normally pre-populates progress.LocationDetails before DownloadBounds runs
++	progress = DownloadProgress{
++		LocationsToDownload: []string{"TEST"},
++		LocationDetails:     map[string]*DownloadLocationDetail{"TEST": {}},
++	}
++
++	// adjustedBounds(38..41.5, -124..-118) on the 2-degree grid -> lat rows 38,40; lon cols -124,-122,-120
++	bounds := Bounds{MinLat: 38.0, MinLon: -124.0, MaxLat: 41.5, MaxLon: -118.0}
++	expected := [][2]int{{38, -124}, {38, -122}, {38, -120}, {40, -124}, {40, -122}, {40, -120}}
++
++	start := time.Now()
++	if err := DownloadBounds(bounds, "TEST"); err != nil {
++		t.Fatalf("DownloadBounds returned error: %v", err)
++	}
++	t.Logf("downloaded %d-tile block in %s (concurrency=%d)", len(expected), time.Since(start), downloadConcurrency())
++
++	for _, e := range expected {
++		dir := filepath.Join(GetBaseOpPath(), "offline", strconv.Itoa(e[0]), strconv.Itoa(e[1]))
++		entries, err := os.ReadDir(dir)
++		if err != nil {
++			t.Errorf("tile (%d,%d) dir missing: %v", e[0], e[1], err)
++			continue
++		}
++		if len(entries) == 0 {
++			t.Errorf("tile (%d,%d) dir empty", e[0], e[1])
++		}
++	}
++
++	// the tmp dir must be cleaned up after the run
++	if _, err := os.Stat(filepath.Join(GetBaseOpPath(), "tmp")); !os.IsNotExist(err) {
++		t.Errorf("tmp dir was not removed after download")
++	}
++}
+diff --git a/params.go b/params.go
+index dc63791..051562a 100644
+--- a/params.go
++++ b/params.go
+@@ -31,6 +31,7 @@ var (
+ 	DOWNLOAD_BOUNDS           = ParamPath("OSMDownloadBounds", true)
+ 	DOWNLOAD_LOCATIONS        = ParamPath("OSMDownloadLocations", true)
+ 	DOWNLOAD_PROGRESS         = ParamPath("OSMDownloadProgress", false)
++	DOWNLOAD_CONCURRENCY      = ParamPath("OSMDownloadConcurrency", false)
+ 	MAP_CURVATURES            = ParamPath("MapCurvatures", true)
+ 	MAP_TARGET_VELOCITIES     = ParamPath("MapTargetVelocities", true)
+ 	MAP_TARGET_LAT_A          = ParamPath("MapTargetLatA", true)

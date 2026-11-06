@@ -99,6 +99,16 @@ def is_stock_model(started, params, CP: car.CarParams) -> bool:
 def mapd_ready(started: bool, params: Params, CP: car.CarParams) -> bool:
   return bool(os.path.exists(Paths.mapd_root()))
 
+# mapd (a Go binary) honors HTTPS_PROXY/HTTP_PROXY for its tile downloads. Read OsmProxyUrl from
+# the params directory at process start (not import time) so a param change applies on the next
+# mapd restart without restarting the manager.
+MAPD_PROXY_ENV = (
+  'if [ -f /data/params/d/OsmProxyUrl ]; then '
+  + 'P=$(cat /data/params/d/OsmProxyUrl); '
+  + '[ -n "$P" ] && export HTTPS_PROXY="$P" HTTP_PROXY="$P"; '
+  + 'fi; '
+)
+
 def uploader_ready(started: bool, params: Params, CP: car.CarParams) -> bool:
   if not params.get_bool("OnroadUploads"):
     return only_offroad(started, params, CP)
@@ -185,7 +195,7 @@ procs += [
   PythonProcess("backup_manager", "openpilot.sunnypilot.sunnylink.backups.manager", and_(only_offroad, sunnylink_ready_shim)),
 
   # mapd
-  NativeProcess("mapd", Paths.mapd_root(), ["bash", "-c", f"{MAPD_PATH} > /dev/null 2>&1"], mapd_ready),
+  NativeProcess("mapd", Paths.mapd_root(), ["bash", "-c", MAPD_PROXY_ENV + f"{MAPD_PATH} > /dev/null 2>&1"], mapd_ready),
   PythonProcess("mapd_manager", "openpilot.sunnypilot.mapd.mapd_manager", always_run),
 
   # locationd

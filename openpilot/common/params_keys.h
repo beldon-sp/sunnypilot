@@ -275,6 +275,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"Offroad_OSMUpdateRequired", {CLEAR_ON_MANAGER_START, JSON}},
     {"OsmDbUpdatesCheck", {CLEAR_ON_MANAGER_START, BOOL}},  // mapd database update happens with device ON, reset on boot
     {"OSMDownloadBounds", {PERSISTENT, STRING}},
+    {"OSMDownloadConcurrency", {PERSISTENT, INT}},  // parallel tile downloads inside mapd, clamped 1..16, default 4
     {"OsmDownloadedDate", {PERSISTENT, STRING, "0.0"}},
     {"OSMDownloadLocations", {PERSISTENT, JSON}},
     {"OSMDownloadProgress", {CLEAR_ON_MANAGER_START, JSON}},
@@ -282,6 +283,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"OsmLocationName", {PERSISTENT, STRING}},
     {"OsmLocationTitle", {PERSISTENT, STRING}},
     {"OsmLocationUrl", {PERSISTENT, STRING}},
+    {"OsmProxyUrl", {PERSISTENT, STRING}},  // http:// or socks5:// proxy handed to mapd and python downloads when set
+    {"OsmMirrorDisabled", {PERSISTENT | BACKUP, BOOL, "0"}},  // force OSM downloads to bypass the CN mirrors
     {"OsmStateName", {PERSISTENT, STRING, "All"}},
     {"OsmStateTitle", {PERSISTENT, STRING}},
     {"OsmWayTest", {PERSISTENT, STRING}},

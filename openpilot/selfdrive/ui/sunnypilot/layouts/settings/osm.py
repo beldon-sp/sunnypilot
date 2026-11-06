@@ -7,7 +7,6 @@ See the LICENSE.md file in the root directory for more details.
 import datetime
 import os
 import platform
-import requests
 import threading
 from pathlib import Path
 from time import monotonic
@@ -16,6 +15,7 @@ from openpilot.common.params import Params
 from openpilot.selfdrive.ui.ui_state import device, ui_state
 from openpilot.selfdrive.ui.layouts.settings.software import time_ago
 from openpilot.common.hardware.hw import Paths
+from openpilot.sunnypilot.mapd.mirrors import fetch_json_with_fallback
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.widgets import DialogResult, Widget
@@ -122,9 +122,10 @@ class OSMLayout(Widget):
   def _do_select_region(self, region_type, btn):
     base_url = "https://raw.githubusercontent.com/pfeiferj/openpilot-mapd/main/"
     url = base_url + ("nation_bounding_boxes.json" if region_type == "Country" else "us_states_bounding_boxes.json")
+    # CN-reachable mirror first, origin as fallback (fetch_json_with_fallback handles both)
+    data = fetch_json_with_fallback(url)
     try:
-      data = requests.get(url, timeout=10).json()
-      locations = sorted([TreeNode(ref=k, data={'display_name': v['full_name']}) for k, v in data.items()], key=lambda n: n.data['display_name'])
+      locations = sorted([TreeNode(ref=k, data={'display_name': v['full_name']}) for k, v in (data or {}).items()], key=lambda n: n.data['display_name'])
     except Exception:
       locations = []
 
