@@ -1,12 +1,13 @@
 import json
 import re
 import string
+import tempfile
 from pathlib import Path
 
 
 from openpilot.common.parameterized import parameterized
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.selfdrive.ui.translations.potools import parse_po
+from openpilot.selfdrive.ui.translations.potools import extract_strings, parse_po
 from openpilot.system.ui.lib.multilang import LANGUAGES_FILE, TRANSLATIONS_DIR
 
 PERCENT_PLACEHOLDER_RE = re.compile(r"%(?:n|\d+)")
@@ -103,3 +104,24 @@ class TestTranslations(OpenpilotTestCase):
     assert not matches, (
       f"{po_path.name}: found '@...;' entity typo(s): {', '.join(sorted(set(matches)))}"
     )
+
+  def test_extraction_includes_string_concatenation(self):
+    # tr("a " + "b") must yield the full runtime string as msgid, not be skipped
+    with tempfile.TemporaryDirectory() as tmp:
+      rel = "ui_sample.py"
+      Path(tmp, rel).write_text(
+        'from x import tr, trn, tr_noop\n'
+        'a = tr("Max speed when engaging openpilot. " + "Resume restores the previous max speed.")\n'
+        'b = tr_noop("pre " + "post")\n'
+        'c = trn("one " + "drive", "many " + "drives", 2)\n'
+        'd = tr("plain literal")\n'
+        'e = tr(f"dynamic {value}")  # runtime interpolation, not extractable\n',
+        encoding="utf-8",
+      )
+      entries = {e.msgid: e for e in extract_strings([rel], tmp)}
+
+      assert "Max speed when engaging openpilot. Resume restores the previous max speed." in entries
+      assert "pre post" in entries
+      assert entries["one drive"].msgid_plural == "many drives"
+      assert "plain literal" in entries
+      assert not any("dynamic" in msgid for msgid in entries)  # f-strings absent by design
