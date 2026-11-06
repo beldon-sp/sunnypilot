@@ -4,6 +4,7 @@ import time
 import threading
 
 import openpilot.cereal.messaging as messaging
+from openpilot.selfdrive.carrot.carrot_man_input import get_carrot_man
 
 from openpilot.cereal import log, custom
 from opendbc.car.structs import car
@@ -82,7 +83,7 @@ class Car:
 
   def __init__(self, CI=None, RI=None) -> None:
     self.can_sock = messaging.sub_sock('can', timeout=20)
-    self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'onroadEvents'] + ['carControlSP', 'longitudinalPlanSP'])
+    self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'onroadEvents'] + ['carControlSP', 'longitudinalPlanSP', 'carrotMan'])
     self.pm = messaging.PubMaster(['sendcan', 'carState', 'carParams', 'carOutput', 'radarTracks'] + ['carParamsSP', 'carStateSP'])
 
     self.can_rcv_cum_timeout_counter = 0
@@ -227,6 +228,9 @@ class Car:
       self.can_log_mono_time = messaging.log_from_bytes(can_strs[0]).logMonoTime
 
     self.v_cruise_helper.update_speed_limit_assist(self.is_metric, self.sm['longitudinalPlanSP'])
+    # carrot 道路限速 → 巡航预设（cruise.py initialize_v_cruise）
+    carrot_man = get_carrot_man(self.sm)
+    self.v_cruise_helper.carrot_road_limit_kph = int(carrot_man.nRoadLimitSpeed) if carrot_man else 0
     self.v_cruise_helper.update_v_cruise(CS, self.sm['carControl'].enabled, self.is_metric)
     if self.sm['carControl'].enabled and not self.CC_prev.enabled:
       # Use CarState w/ buttons from the step selfdrived enables on

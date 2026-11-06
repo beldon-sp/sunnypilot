@@ -3,6 +3,7 @@ import numpy as np
 
 from opendbc.car.structs import car
 from openpilot.common.constants import CV
+from openpilot.common.raw_params import get_int_param
 from openpilot.sunnypilot.selfdrive.car.cruise_ext import VCruiseHelperSP
 
 
@@ -37,6 +38,10 @@ class VCruiseHelper(VCruiseHelperSP):
     self.v_cruise_kph_last = 0
     self.button_timers = {ButtonType.decelCruise: 0, ButtonType.accelCruise: 0}
     self.button_change_states = {btn: {"standstill": False, "enabled": False} for btn in self.button_timers}
+    # carrot 巡航预设跟随道路限速（card.py 每帧从 carrotMan 喂 road limit）
+    self.carrot_road_limit_kph = 0
+    self.carrot_road_speed_limit_offset = get_int_param(self.params, "AutoRoadSpeedLimitOffset", -1)
+    self.carrot_navi_speed_safety_factor = get_int_param(self.params, "AutoNaviSpeedSafetyFactor", 105) * 0.01
 
   @property
   def v_cruise_initialized(self):
@@ -163,6 +168,13 @@ class VCruiseHelper(VCruiseHelperSP):
     if any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents) and self.v_cruise_initialized:
       self.v_cruise_kph = self.v_cruise_kph_last
     else:
+      # carrot 权威期预设跟随道路限速（×安全系数 / +偏移，与 carrot 行为一致）；
+      # road limit 由 card.py 每帧从 carrotMan 喂入
+      if self.carrot_road_limit_kph > 0:
+        if self.carrot_road_speed_limit_offset < 0:
+          initial_speed = int(round(self.carrot_road_limit_kph * self.carrot_navi_speed_safety_factor))
+        else:
+          initial_speed = int(round(self.carrot_road_limit_kph + self.carrot_road_speed_limit_offset))
       self.v_cruise_kph = int(round(np.clip(max(CS.vEgo * CV.MS_TO_KPH, initial_speed), V_CRUISE_INITIAL, V_CRUISE_MAX)))
 
     self.v_cruise_cluster_kph = self.v_cruise_kph

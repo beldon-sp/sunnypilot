@@ -76,6 +76,7 @@ class Controls(ControlsExt):
 
   def update(self):
     self.sm.update(15)
+    self.carrot.update(self.sm)
     if self.sm.updated["extrinsicsCalibration"]:
       self.pose_calibrator.feed_extrinsics_calibration(self.sm['extrinsicsCalibration'])
     if self.sm.updated["deviceMotion"]:
@@ -195,7 +196,11 @@ class Controls(ControlsExt):
     CC.cruiseControl.resume = CC.enabled and CS.cruiseState.standstill and not self.sm['longitudinalPlan'].shouldStop
 
     hudControl = CC.hudControl
-    hudControl.setSpeed = float(CS.vCruiseCluster * CV.KPH_TO_MS)
+    # carrot 权威期 setSpeed 取 min(vCruiseCluster, desiredSpeed)（design D2）
+    hud_set_speed_kph = CS.vCruiseCluster
+    if self.carrot.capping:
+      hud_set_speed_kph = min(hud_set_speed_kph, self.carrot.desired_speed_kph)
+    hudControl.setSpeed = float(hud_set_speed_kph * CV.KPH_TO_MS)
     hudControl.speedVisible = CC.enabled
     hudControl.lanesVisible = CC.enabled
     hudControl.leadVisible = self.sm['longitudinalPlan'].hasLead

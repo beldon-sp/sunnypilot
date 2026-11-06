@@ -10,6 +10,7 @@ from openpilot.cereal import messaging, log, custom
 from opendbc.car.structs import car
 from opendbc.sunnypilot.car.interfaces import has_bsm
 from openpilot.common.params import Params
+from openpilot.selfdrive.carrot.carrot_mode import CarrotMode, carrot_mode_seconds_from_params
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.display import OnroadBrightness
 from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS, get_active_source
 from openpilot.sunnypilot.sunnylink.sunnylink_state import SunnylinkState
@@ -36,7 +37,8 @@ class UIStateSP:
     self.is_sp_release: bool = self.params.get_bool("IsReleaseSpBranch")
     self.sm_services_ext = [
       "modelManagerSP", "selfdriveStateSP", "longitudinalPlanSP", "backupManagerSP",
-      "lateralTorqueParameters", "carStateSP", "liveMapDataSP", "carParamsSP", "lateralDelay", "modelDataV2SP"
+      "lateralTorqueParameters", "carStateSP", "liveMapDataSP", "carParamsSP", "lateralDelay", "modelDataV2SP",
+      "carrotMan",
     ]
 
     self.sunnylink_state = SunnylinkState()
@@ -67,11 +69,38 @@ class UIStateSP:
     self.torque_override_enabled: bool = False
     self._sp_initialized: bool = False
 
+    # carrot (carrotpilot port): display source arbitration. Widgets read the
+    # snapshot fields only while carrot_active is set; the hysteresis keeps the
+    # source stable across 搭子 connect/drop churn.
+    self.carrot_mode = CarrotMode(*carrot_mode_seconds_from_params(self.params))
+    self.carrot_active: bool = False
+    self.carrot_road_name: str = ""
+    self.carrot_road_limit: int = 0
+    self.carrot_desired_speed: int = 0
+    self.carrot_desired_source: str = ""
+    self.carrot_left_sec: int = 0
+    self.carrot_traffic_state: int = 0
+
   def update(self) -> None:
     if self.sunnylink_enabled:
       self.sunnylink_state.start()
     else:
       self.sunnylink_state.stop()
+
+    self._update_carrot()
+
+  def _update_carrot(self) -> None:
+    # Mode follows the hysteresis around the carrotMan staleness guard; the
+    # snapshot fields come from the last received carrotMan message (kept
+    # through the exit grace so the display does not flicker mid-transition).
+    self.carrot_active = self.carrot_mode.update_from_sm(self.sm)
+    cm = self.sm["carrotMan"]
+    self.carrot_road_name = str(cm.szPosRoadName or "")
+    self.carrot_road_limit = int(cm.nRoadLimitSpeed)
+    self.carrot_desired_speed = int(cm.desiredSpeed)
+    self.carrot_desired_source = str(cm.desiredSource or "")
+    self.carrot_left_sec = int(cm.leftSec)
+    self.carrot_traffic_state = int(cm.trafficState)
 
   def onroad_brightness_handle_alerts(self, _ui_state, alert):
     if _ui_state.sm.recv_frame["carState"] < _ui_state.started_frame:

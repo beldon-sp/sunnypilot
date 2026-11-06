@@ -200,6 +200,16 @@ procs += [
 
   # locationd
   NativeProcess("locationd_llk", "openpilot/sunnypilot/selfdrive/locationd", ["./locationd"], only_onroad),
+
+  # carrot (carrotpilot port)
+  # carrot_navi permanently owns TCP 7714 and publishes navigation data over cereal.
+  PythonProcess("carrot_navi", "openpilot.selfdrive.carrot.carrot_navi", always_run, restart_if_crash=True),
+
+  # LAN event push service (WebSocket/SSE :8083), see openpilot/mate/server.py
+  PythonProcess("mate", "openpilot.mate.server", always_run, restart_if_crash=True),
+
+  # carrot_man: 20Hz 聚合中枢（carrotNavi/carState → carrotMan min() 决策 + 7705 发现广播）
+  PythonProcess("carrot_man", "openpilot.selfdrive.carrot.carrot_man", always_run, restart_if_crash=True),
 ]
 
 if os.path.exists("../../sunnypilot/sunnylink/uploader.py"):

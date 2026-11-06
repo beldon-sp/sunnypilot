@@ -16,6 +16,7 @@ class RoadNameRenderer(Widget):
   def __init__(self):
     super().__init__()
     self.road_name = ""
+    self.road_name_lmd = ""
     self.is_metric = False
     self.font_demi = gui_app.font(FontWeight.SEMI_BOLD)
 
@@ -28,7 +29,14 @@ class RoadNameRenderer(Widget):
 
     if sm.updated["liveMapDataSP"]:
       lmd = sm["liveMapDataSP"]
-      self.road_name = lmd.roadName
+      self.road_name_lmd = lmd.roadName
+
+    # carrot (搭子 AMap) is the top-priority road name source while the
+    # authority mode is active; fall back to the mapd source otherwise.
+    if ui_state.carrot_active and ui_state.carrot_road_name:
+      self.road_name = ui_state.carrot_road_name
+    else:
+      self.road_name = self.road_name_lmd
 
   def _render(self, rect: rl.Rectangle):
     if not self.road_name or not ui_state.road_name_toggle:

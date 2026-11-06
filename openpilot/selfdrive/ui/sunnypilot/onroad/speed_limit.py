@@ -159,6 +159,18 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
 
       self.speed_limit_ahead_dist_prev = self.speed_limit_ahead_dist
 
+    # carrot (搭子 AMap) road limit overrides the sign while the authority mode
+    # is active; the resolver values keep updating underneath so dropping back
+    # is instant on mode exit.
+    if ui_state.carrot_active and ui_state.carrot_road_limit > 0:
+      limit = ui_state.carrot_road_limit * (self.speed_conv / CV.MS_TO_KPH)
+      self.speed_limit = limit
+      self.speed_limit_last = limit
+      self.speed_limit_final_last = limit
+      self.speed_limit_offset = 0.0
+      self.speed_limit_valid = True
+      self.speed_limit_last_valid = True
+
     controls_state = sm['controlsState']
     car_state = sm["carState"]
 

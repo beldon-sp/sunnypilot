@@ -2650,8 +2650,9 @@ struct Event {
     carStateSP @114 :Custom.CarStateSP;
     liveMapDataSP @115 :Custom.LiveMapDataSP;
     modelDataV2SP @116 :Custom.ModelDataV2SP;
-    customReserved10 @136 :Custom.CustomReserved10;
-    customReserved11 @137 :Custom.CustomReserved11;
+    carrotMan @136 :Custom.CarrotMan;  # carrotpilot port (uses this fork's reserved slot; carrot's ordinal @107 is taken by selfdriveStateSP)
+    carrotNavi @137 :Custom.CarrotNaviState;  # carrotpilot port (carrot's ordinal @108 is taken by modelManagerSP)
+    navInstructionCarrot @154 :NavInstruction;  # carrotpilot port (carrot's ordinal @126; next available in this fork is 154)
     customReserved12 @138 :Custom.CustomReserved12;
     customReserved13 @139 :Custom.CustomReserved13;
     customReserved14 @140 :Custom.CustomReserved14;

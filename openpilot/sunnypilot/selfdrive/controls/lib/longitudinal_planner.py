@@ -8,7 +8,9 @@ See the LICENSE.md file in the root directory for more details.
 from openpilot.cereal import messaging, custom
 from opendbc.car import structs
 from openpilot.common.constants import CV
+from openpilot.common.params import Params
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
+from openpilot.selfdrive.carrot.carrot_cruise import CarrotCruise
 from openpilot.sunnypilot.selfdrive.controls.lib.e2e_alerts_helper import E2EAlertsHelper
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.smart_cruise_control import SmartCruiseControl
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import SpeedLimitAssist
@@ -29,6 +31,7 @@ class LongitudinalPlannerSP:
     self.generation = int(model_bundle.generation) if (model_bundle := get_active_bundle()) else None
     self.source = LongitudinalPlanSource.cruise
     self.e2e_alerts_helper = E2EAlertsHelper()
+    self.carrot = CarrotCruise(Params())
 
     self.output_v_target = 0.
     self.output_a_target = 0.
@@ -41,15 +44,20 @@ class LongitudinalPlannerSP:
     long_enabled = sm['carControl'].enabled
     long_override = sm['carControl'].cruiseControl.override
 
+    # carrot 权威模式门（design D2）：carrot 活跃期 SLA/SCC 挂起（其输出被 cap 吸收，
+    # 且禁止 SLA 改巡航目标/SCC 曲率源与 carrot vTurnSpeed 同效），退出后各自重新武装
+    self.carrot.update(sm)
+    carrot_authority = self.carrot.mode_active
+
     # Smart Cruise Control
-    self.scc.update(sm, long_enabled, long_override, v_ego, a_ego, v_cruise)
+    self.scc.update(sm, long_enabled and not carrot_authority, long_override, v_ego, a_ego, v_cruise)
 
     # Speed Limit Resolver
     self.resolver.update(v_ego, sm)
 
     # Speed Limit Assist
     has_speed_limit = self.resolver.speed_limit_valid or self.resolver.speed_limit_last_valid
-    self.sla.update(long_enabled, long_override, v_ego, a_ego, v_cruise_cluster, self.resolver.speed_limit,
+    self.sla.update(long_enabled and not carrot_authority, long_override, v_ego, a_ego, v_cruise_cluster, self.resolver.speed_limit,
                     self.resolver.speed_limit_final_last, has_speed_limit, self.resolver.distance, self.events_sp)
 
     targets = {
@@ -61,6 +69,10 @@ class LongitudinalPlannerSP:
 
     self.source = min(targets, key=lambda k: targets[k][0])
     self.output_v_target, self.output_a_target = targets[self.source]
+
+    # carrot min cap（放在 SLA/SCC 之后，design D2）：权威期 desiredSpeed 吸收所有源；
+    # guard 失效（≤1s）即放开，回落原生链路
+    self.output_v_target = self.carrot.cap_v_target(self.output_v_target)
     return self.output_v_target, self.output_a_target
 
   def update(self, sm: messaging.SubMaster) -> None:

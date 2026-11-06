@@ -34,7 +34,10 @@ def main():
 
   while True:
     sm.update()
-    longitudinal_planner.sla.update_buttons(sm['selfdriveStateSP'].buttonsReleaseToggle)
+    # SLA gate（design D2）：carrot 权威期禁止 SLA 消费按键确认（改巡航目标）；
+    # 退出后恢复调用，SLA 以当前限速重新武装
+    if not longitudinal_planner.carrot.mode_active:
+      longitudinal_planner.sla.update_buttons(sm['selfdriveStateSP'].buttonsReleaseToggle)
     if sm.updated['modelV2']:
       longitudinal_planner.update(sm)
       longitudinal_planner.publish(sm, pm)

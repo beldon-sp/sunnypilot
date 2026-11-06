@@ -37,6 +37,9 @@ class DesireHelper:
     # lane-change minimum speed floor; stock constant, brand subclasses may
     # replace it with a param-driven value (see desire_helper_byd)
     self.lane_change_speed_floor_ms = LANE_CHANGE_SPEED_MIN
+    # carrot ATC 转弯区间（activeCarrot>1 ∧ 0<xDistToTurn<100）：冻结变道发起，
+    # 由 modeld 每帧从 carrotMan 喂入（见 carrot_cruise.CarrotCruise.atc_active）
+    self.carrot_atc_active = False
 
   # ── brand adaptation hooks - stock defaults are behavior-neutral no-ops;
   #    desire_helper_byd.BydDesireHelper overrides them with the vendor port ──
@@ -110,7 +113,8 @@ class DesireHelper:
           self.lane_change_timer = 0.0
         # brand clear-window gate (stock _clear_window_ok() is always True;
         # BYD requires fresh rear-traffic clearance before any start path)
-        elif (torque_applied or self.alc.auto_lane_change_allowed) and not self.alc.lane_change_blocked and self._clear_window_ok():
+        elif (torque_applied or self.alc.auto_lane_change_allowed) and not self.alc.lane_change_blocked \
+          and not self.carrot_atc_active and self._clear_window_ok():
           self.lane_change_state = LaneChangeState.laneChangeStarting
           self.lane_change_timer = 0.0
           self.lane_change_clear_time = 0.0

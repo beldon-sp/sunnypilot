@@ -312,4 +312,36 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"TorqueParamsOverrideEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TorqueParamsOverrideFriction", {PERSISTENT | BACKUP, FLOAT, "0.1"}},
     {"TorqueParamsOverrideLatAccelFactor", {PERSISTENT | BACKUP, FLOAT, "2.5"}},
+
+    // carrot (carrotpilot port): mate / carrot_navi / carrot_man
+    {"MateToken", {PERSISTENT, STRING, ""}},
+    {"CarrotModeEnterSec", {PERSISTENT, INT, "3"}},
+    {"CarrotModeExitSec", {PERSISTENT, INT, "10"}},
+    {"ClusterNaviMapTheme", {PERSISTENT, INT, "1"}},
+    {"ClusterNaviMapType", {PERSISTENT, INT, "0"}},
+    {"ClusterNaviMapFps", {PERSISTENT, INT, "1"}},
+    {"CarrotNaviHudMapProfile", {PERSISTENT, INT, "0"}},
+
+    // carrot 聚合控车参数（默认值照搬 carrot params_keys.h）
+    {"AutoCurveSpeedFactor", {PERSISTENT, INT, "120"}},
+    {"AutoCurveSpeedLowerLimit", {PERSISTENT, INT, "30"}},
+    {"AutoNaviSpeedBumpSpeed", {PERSISTENT, INT, "35"}},
+    {"AutoNaviSpeedBumpTime", {PERSISTENT, INT, "1"}},
+    {"AutoNaviSpeedBumpEndDistance", {PERSISTENT, INT, "200"}},
+    {"AutoNaviSpeedCtrlEnd", {PERSISTENT, INT, "7"}},
+    {"AutoNaviSpeedCtrlMode", {PERSISTENT, INT, "2"}},
+    {"AutoNaviSpeedDecelRate", {PERSISTENT, INT, "120"}},
+    {"AutoNaviSpeedSafetyFactor", {PERSISTENT, INT, "105"}},
+    {"AutoNaviCountDownMode", {PERSISTENT, INT, "2"}},
+    {"AutoNaviRearCameraHoldDistance", {PERSISTENT, INT, "100"}},
+    {"AutoRoadSpeedLimitOffset", {PERSISTENT, INT, "0"}},  // 本仓默认 0（road 源=限速原值，spec「AMap 限速 cap」场景）；carrot 原默认 -1=安全系数模式（预设用）
+    {"AutoTurnControl", {PERSISTENT, INT, "0"}},
+    {"AutoTurnControlSpeedTurn", {PERSISTENT, INT, "20"}},
+    {"AutoTurnControlTurnEnd", {PERSISTENT, INT, "6"}},
+    {"AutoTurnMapChange", {PERSISTENT, INT, "0"}},
+    {"MapTurnSpeedFactor", {PERSISTENT, INT, "90"}},
+    {"TurnSpeedControlMode", {PERSISTENT, INT, "1"}},
+    {"VehicleNaviCanControl", {PERSISTENT, INT, "0"}},
+    {"VehicleNaviSchoolZoneControl", {PERSISTENT, BOOL, "0"}},
+    {"VehicleSpeedCameraControlMode", {PERSISTENT, INT, "1"}},
 };
