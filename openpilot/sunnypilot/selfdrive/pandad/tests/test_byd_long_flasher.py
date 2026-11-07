@@ -53,6 +53,8 @@ class FakePanda:
   REQUEST_IN = 0xc0
   hw_type = b'\x05'  # UNO, F4
   enters_bootstub = True
+  starts_in_bootstub = False
+  connect_raises = False
   instances = []
   sig_calls = 0
   expected_sig = b""
@@ -60,7 +62,7 @@ class FakePanda:
   def __init__(self, serial):
     self.serial = serial
     self._handle = FakeHandle()
-    self.bootstub = False
+    self.bootstub = FakePanda.starts_in_bootstub
     self.closed = False
     self.connects = 0
     FakePanda.instances.append(self)
@@ -71,6 +73,8 @@ class FakePanda:
     cls.sig_calls = 0
     cls.hw_type = b'\x05'
     cls.enters_bootstub = True
+    cls.starts_in_bootstub = False
+    cls.connect_raises = False
 
   def get_type(self):
     return FakePanda.hw_type
@@ -89,6 +93,8 @@ class FakePanda:
 
   def connect(self, claim=True, wait=False):
     assert wait is False, "wait=True loops forever when the board never comes back"
+    if FakePanda.connect_raises:
+      raise Exception("device went away")
     self.connects += 1
     self.bootstub = FakePanda.enters_bootstub and self.connects == 1
 
@@ -233,3 +239,32 @@ def test_checksum_mismatch_refuses_flash(monkeypatch, tmp_path):
   monkeypatch.setattr(m, "FW_PATH", str(bad))
   m.flash_byd_long(["spi-serial-0001"])
   assert FakePanda.instances == []
+
+
+def test_bootstub_state_flashes_directly_without_reentry(isolated):
+  # a prior interrupted flash can leave the board already in the bootstub
+  FakeParams.store = {"CarPlatformBundle": {"brand": "byd"}}
+  FakePanda.starts_in_bootstub = True
+  m.flash_byd_long(["spi-serial-0001"])
+
+  panda = FakePanda.instances[0]
+  assert not any(a[1] == 0xd1 for a in panda._handle.control_writes), "no re-entry needed"
+  assert any(a[1] == 0xb1 for a in panda._handle.control_writes), "flasher path was taken"
+  with open(FW, "rb") as f:
+    assert b"".join(d for _, d in panda._handle.bulk_writes) == f.read()
+  assert panda.connects == 1  # single bounded re-open after flashing
+  assert m._read_attempts() == 1
+
+
+def test_bounded_wait_gives_up_when_board_never_returns(isolated, monkeypatch):
+  # board answers the 0xd1 request then vanishes: give up in bounded time, never hang
+  FakeParams.store = {"CarPlatformBundle": {"brand": "byd"}}
+  monkeypatch.setattr(m, "FLASH_ENTRY_WAIT_S", 0.05)
+  FakePanda.connect_raises = True
+  m.flash_byd_long(["spi-serial-0001"])
+
+  panda = FakePanda.instances[0]
+  assert any(a[1] == 0xd1 for a in panda._handle.control_writes), "entry was requested"
+  assert not any(a[1] == 0xb1 for a in panda._handle.control_writes), "must not erase"
+  assert not panda._handle.bulk_writes, "must not write app bytes"
+  assert any("FAILED" in str(r) for r in isolated.records)

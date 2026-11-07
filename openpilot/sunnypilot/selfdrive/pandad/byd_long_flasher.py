@@ -148,6 +148,9 @@ def _flash_panda(panda: Panda, code: bytes, serial: str) -> None:
     cloudlog.info("BYD panda already running longitudinal firmware")
     return
 
+  # count before touching hardware so a failure can never loop-flash;
+  # an already-up-to-date panda must not consume the per-boot quota
+  _record_attempt()
   cloudlog.info(f"Flashing BYD longitudinal firmware to F4 panda {serial}")
   if not panda.bootstub:
     # Panda.reset() asserts SUPPORTED_DEVICES, which excludes UNO/DOS
@@ -213,8 +216,6 @@ def flash_byd_long(panda_serials: list[str]) -> None:
         continue
       if hw_type not in BYD_LEGACY_HW_TYPES:
         continue
-      # count before touching hardware so a failure can never loop-flash
-      _record_attempt()
       _flash_panda(panda, code, serial)
       return
     except Exception as e:
