@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Regression tests for the BYD longitudinal firmware OTA flasher.
 
-No hardware is touched: Panda, Params, messaging and cloudlog are replaced with
-fakes. The real firmware blob is read from the repo, so checksum, sector math
-and write chunking are exactly what production uses.
+No hardware is touched: Panda, PandaDFU, HARDWARE, Params, messaging and
+cloudlog are replaced with fakes. The real firmware and bootstub blobs are
+read from the repo, so checksums, sector math and write chunking are exactly
+what production uses.
 """
 import hashlib
 import math
@@ -14,6 +15,7 @@ import pytest
 from openpilot.sunnypilot.selfdrive.pandad import byd_long_flasher as m
 
 FW = os.path.join(os.path.dirname(m.__file__), "byd_long_fw.bin.signed")
+BOOTSTUB = os.path.join(os.path.dirname(m.__file__), "byd_long_bootstub.bin")
 
 
 class FakeHandle:
@@ -49,12 +51,55 @@ class FakeParams:
     return FakeParams.store.get(key)
 
 
+class FakeHardware:
+  def __init__(self):
+    self.recovers = 0
+
+  def recover_internal_panda(self):
+    self.recovers += 1
+
+
+class FakeDFU:
+  instances = []
+  serials = ["dfu-serial-0001"]
+  fail_list = False
+
+  def __init__(self, serial):
+    self.serial = serial
+    self.programmed = None
+    self.reset_called = False
+    self.closed = False
+    FakeDFU.instances.append(self)
+
+  @classmethod
+  def reset_class(cls):
+    cls.instances = []
+    cls.serials = ["dfu-serial-0001"]
+    cls.fail_list = False
+
+  @staticmethod
+  def list():
+    if FakeDFU.fail_list:
+      return []
+    return list(FakeDFU.serials)
+
+  def program_bootstub(self, code):
+    self.programmed = code
+
+  def reset(self):
+    self.reset_called = True
+
+  def close(self):
+    self.closed = True
+
+
 class FakePanda:
   REQUEST_IN = 0xc0
   hw_type = b'\x05'  # UNO, F4
   enters_bootstub = True
   starts_in_bootstub = False
   connect_raises = False
+  up_to_date = False
   instances = []
   sig_calls = 0
   expected_sig = b""
@@ -75,12 +120,15 @@ class FakePanda:
     cls.enters_bootstub = True
     cls.starts_in_bootstub = False
     cls.connect_raises = False
+    cls.up_to_date = False
 
   def get_type(self):
     return FakePanda.hw_type
 
   def get_signature(self):
     FakePanda.sig_calls += 1
+    if FakePanda.up_to_date:
+      return FakePanda.expected_sig
     # first read is the pre-flash firmware, later reads are the flashed one
     return FakePanda.expected_sig if FakePanda.sig_calls >= 2 else b'\x00' * 128
 
@@ -96,6 +144,8 @@ class FakePanda:
     if FakePanda.connect_raises:
       raise Exception("device went away")
     self.connects += 1
+    # after the DFU bootstub write the board comes back in bootstub; after the
+    # app flash it comes back as the running firmware
     self.bootstub = FakePanda.enters_bootstub and self.connects == 1
 
   @staticmethod
@@ -124,9 +174,13 @@ def isolated(monkeypatch, tmp_path):
   with open(FW, "rb") as f:
     FakePanda.expected_sig = f.read()[-128:]
   FakePanda.reset()
+  FakeDFU.reset_class()
   FakeParams.store = {}
   log = FakeLog()
+  hardware = FakeHardware()
   monkeypatch.setattr(m, "Panda", FakePanda)
+  monkeypatch.setattr(m, "PandaDFU", FakeDFU)
+  monkeypatch.setattr(m, "HARDWARE", hardware)
   monkeypatch.setattr(m, "Params", FakeParams)
   monkeypatch.setattr(m, "cloudlog", log)
   monkeypatch.setattr(m.messaging, "log_from_bytes", fake_log_from_bytes)
@@ -148,15 +202,18 @@ def test_is_byd_sources(store, expected):
   assert m._is_byd() is expected
 
 
-def test_firmware_blob_is_the_vendor_image():
+def test_firmware_blob_is_the_panda_fw_base_pair():
   with open(m.FW_PATH, "rb") as f:
     code = f.read()
+  with open(m.BOOTSTUB_PATH, "rb") as f:
+    bootstub = f.read()
   assert hashlib.sha256(code).hexdigest() == m.FW_SHA256
-  assert len(code) == 88688
-  # pin the carrot vendor build by its embedded version string; the
-  # panda_fw_base@9d0a0046 DEBUG build crash-loops on the target board and
-  # must never be shipped here (see flasher docstring)
-  assert b"DEV-6e4111d4-RELEASE" in code
+  assert len(code) == 57924
+  # pin the panda_fw_base@9d0a0046 DEBUG build by its embedded version string;
+  # verified running on the target board on 2026-11-08 (see flasher docstring)
+  assert b"DEV-9d0a0046-DEBUG" in code
+  assert hashlib.sha256(bootstub).hexdigest() == m.BOOTSTUB_SHA256
+  assert len(bootstub) == 14344
 
 
 def test_flash_static_erases_right_sectors_and_writes_all_bytes():
@@ -174,30 +231,48 @@ def test_flash_static_erases_right_sectors_and_writes_all_bytes():
   assert b"".join(data for _, data in handle.bulk_writes) == code
 
 
-def test_happy_path_flashes_internal_spi_panda(isolated):
+def test_happy_path_pair_flashes_via_dfu(isolated):
   FakeParams.store = {"CarPlatformBundle": {"brand": "byd"}}
+  with open(BOOTSTUB, "rb") as f:
+    bootstub_code = f.read()
   m.flash_byd_long(["spi-serial-0001"])
 
-  assert len(FakePanda.instances) == 1
+  assert len(FakeDFU.instances) == 1
+  dfu = FakeDFU.instances[0]
+  assert dfu.programmed == bootstub_code, "dev bootstub must be written over DFU"
+  assert dfu.reset_called and dfu.closed
+
   panda = FakePanda.instances[0]
-  assert panda.connects == 2  # bounded re-open after bootstub entry and after flashing
-  assert any(a[1] == 0xd1 and a[2] == 1 for a in panda._handle.control_writes)
+  assert not any(a[1] == 0xd1 for a in panda._handle.control_writes), "app-only flash through an unknown bootstub is never safe"
   with open(FW, "rb") as f:
     assert b"".join(d for _, d in panda._handle.bulk_writes) == f.read()
+  assert panda.connects == 2  # bounded re-open after DFU and after flashing
   assert panda.closed
   assert m._read_attempts() == 1
   assert any("flashed and verified" in str(r) for r in isolated.records)
 
 
-def test_stale_bootloader_writes_no_bytes(isolated):
+def test_up_to_date_panda_is_a_no_op(isolated):
   FakeParams.store = {"CarPlatformBundle": {"brand": "byd"}}
-  FakePanda.enters_bootstub = False
+  FakePanda.up_to_date = True
   m.flash_byd_long(["spi-serial-0001"])
 
-  panda = FakePanda.instances[0]
-  assert not any(a[1] == 0xb1 for a in panda._handle.control_writes), "must not erase"
-  assert not panda._handle.bulk_writes, "must not write app bytes"
+  assert len(FakeDFU.instances) == 0, "matching signature must not trigger a DFU cycle"
+  assert not FakePanda.instances[0]._handle.bulk_writes
+  assert m._read_attempts() == 0, "an up-to-date panda must not consume the per-boot quota"
+
+
+def test_dfu_never_appears_fails_without_touching_app(isolated, monkeypatch):
+  FakeParams.store = {"CarPlatformBundle": {"brand": "byd"}}
+  monkeypatch.setattr(m, "DFU_ENTRY_WAIT_S", 0.05)
+  monkeypatch.setattr(m.time, "sleep", lambda s: None)
+  FakeDFU.fail_list = True
+  m.flash_byd_long(["spi-serial-0001"])
+
+  assert FakeDFU.instances == []
+  assert not FakePanda.instances[0]._handle.bulk_writes, "must not write app bytes"
   assert any("FAILED" in str(r) for r in isolated.records), "failure must not be silent"
+  assert m._read_attempts() == 1
 
 
 def test_idempotent_within_process_and_capped_across_restarts():
@@ -236,39 +311,41 @@ def test_non_uno_panda_is_not_flashed_and_does_not_consume_an_attempt():
   assert m._read_attempts() == 0
 
 
-def test_checksum_mismatch_refuses_flash(monkeypatch, tmp_path):
+@pytest.mark.parametrize("blob_path, sha_name, tmp_name", [
+  ("FW_PATH", "FW_SHA256", "bad_fw.bin"),
+  ("BOOTSTUB_PATH", "BOOTSTUB_SHA256", "bad_bootstub.bin"),
+])
+def test_checksum_mismatch_refuses_flash(monkeypatch, tmp_path, blob_path, sha_name, tmp_name):
   FakeParams.store = {"CarPlatformBundle": {"brand": "byd"}}
-  bad = tmp_path / "bad_fw.bin"
+  bad = tmp_path / tmp_name
   bad.write_bytes(b"not a firmware")
-  monkeypatch.setattr(m, "FW_PATH", str(bad))
+  monkeypatch.setattr(m, blob_path, str(bad))
   m.flash_byd_long(["spi-serial-0001"])
   assert FakePanda.instances == []
+  assert FakeDFU.instances == []
 
 
-def test_bootstub_state_flashes_directly_without_reentry(isolated):
-  # a prior interrupted flash can leave the board already in the bootstub
+def test_board_in_bootstub_still_pair_flashes(isolated):
+  # a prior interrupted flash can leave the board in bootstub - and bootstub
+  # identity cannot be queried, so the DFU pair-flash is taken regardless
   FakeParams.store = {"CarPlatformBundle": {"brand": "byd"}}
   FakePanda.starts_in_bootstub = True
   m.flash_byd_long(["spi-serial-0001"])
 
-  panda = FakePanda.instances[0]
-  assert not any(a[1] == 0xd1 for a in panda._handle.control_writes), "no re-entry needed"
-  assert any(a[1] == 0xb1 for a in panda._handle.control_writes), "flasher path was taken"
+  assert len(FakeDFU.instances) == 1, "bootstub identity is unknown, always pair-flash"
   with open(FW, "rb") as f:
-    assert b"".join(d for _, d in panda._handle.bulk_writes) == f.read()
-  assert panda.connects == 1  # single bounded re-open after flashing
+    assert b"".join(d for _, d in FakePanda.instances[0]._handle.bulk_writes) == f.read()
   assert m._read_attempts() == 1
 
 
 def test_bounded_wait_gives_up_when_board_never_returns(isolated, monkeypatch):
-  # board answers the 0xd1 request then vanishes: give up in bounded time, never hang
+  # DFU bootstub write succeeds but the board never comes back: give up in
+  # bounded time, never hang
   FakeParams.store = {"CarPlatformBundle": {"brand": "byd"}}
-  monkeypatch.setattr(m, "FLASH_ENTRY_WAIT_S", 0.05)
+  monkeypatch.setattr(m, "BOOTSTUB_WAIT_S", 0.05)
   FakePanda.connect_raises = True
   m.flash_byd_long(["spi-serial-0001"])
 
-  panda = FakePanda.instances[0]
-  assert any(a[1] == 0xd1 for a in panda._handle.control_writes), "entry was requested"
-  assert not any(a[1] == 0xb1 for a in panda._handle.control_writes), "must not erase"
-  assert not panda._handle.bulk_writes, "must not write app bytes"
+  assert len(FakeDFU.instances) == 1, "bootstub was written over DFU"
+  assert not FakePanda.instances[0]._handle.bulk_writes, "must not write app bytes"
   assert any("FAILED" in str(r) for r in isolated.records)
