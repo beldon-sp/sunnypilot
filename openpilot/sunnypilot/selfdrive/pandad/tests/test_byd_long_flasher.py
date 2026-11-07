@@ -152,9 +152,11 @@ def test_firmware_blob_is_the_vendor_image():
   with open(m.FW_PATH, "rb") as f:
     code = f.read()
   assert hashlib.sha256(code).hexdigest() == m.FW_SHA256
-  assert len(code) == 57924
-  # pin the exact panda_fw_base@9d0a0046 build by its embedded version string
-  assert b"DEV-9d0a0046-DEBUG" in code
+  assert len(code) == 88688
+  # pin the carrot vendor build by its embedded version string; the
+  # panda_fw_base@9d0a0046 DEBUG build crash-loops on the target board and
+  # must never be shipped here (see flasher docstring)
+  assert b"DEV-6e4111d4-RELEASE" in code
 
 
 def test_flash_static_erases_right_sectors_and_writes_all_bytes():

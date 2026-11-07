@@ -14,12 +14,15 @@ never gets a firmware update. A panda without BYD_PARAM_LONGITUDINAL rejects
 the whole 0x32D/E/F ACC stream, controls_allowed never latches, and selfdrived
 raises controlsMismatch via mismatch_counter >= 200.
 
-Delivered firmware (panda_fw_base@9d0a0046 build, version DEV-9d0a0046-DEBUG,
-F4/UNO): full-duplex CAN relay with the camera's 0x316 blocked from the EPS so
-OP's own 50 Hz spoof is the only source, plus BYD_PARAM_LONGITUDINAL with
-transparent ACC replacement (0x32D/E/F relay + accel checks). Its health
-packet is carrot v17 (59 bytes, wake_on_can_pkt inserted after ignition_can);
-pandad's get_state() identifies it by reply size and converts, see
+Delivered firmware (carrot vendor build, version DEV-6e4111d4-RELEASE,
+F4/UNO): injector-architecture longitudinal firmware ("byd acc inject" fwd
+hooks). NOTE the architecture consequence measured live on 2026-11-08: with
+this image the panda blocks the host-spoofed 0x316 LKAS stream (~50/s with
+safetyParam=0), so lateral control is impaired while it runs. The
+architecture-matched panda_fw_base build (DEV-9d0a0046-DEBUG) crash-loops on
+this board and must not be shipped until rebuilt against the vendor board
+config. Its health packet is 57 bytes; pandad's get_state() identifies both
+legacy and carrot-v17 layouts by reply size, see
 selfdrive/pandad/panda.h.
 
 This module mirrors rivian_long_flasher.py: the firmware lives in the main
@@ -47,12 +50,13 @@ from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 
 FW_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "byd_long_fw.bin.signed")
-# panda_fw_base@9d0a0046 build (safety_byd.h: full-duplex relay + OP-spoofed
-# 0x316, BYD_PARAM_LONGITUDINAL with transparent ACC replacement). This is the
-# architecture the sunnypilot BYD carport expects. The carrot vendor build
-# (DEV-6e4111d4-RELEASE) runs an injector architecture that blocks OP's own
-# 0x316 stream at ~50 Hz/s and must NOT be delivered here.
-FW_SHA256 = "af5174fcf8e0f3f6faca28299903c4ce7c3e2781db403bfbe029c4d4348f75b6"
+# Vendor carrot build (DEV-6e4111d4-RELEASE) - the ONLY image known to boot on
+# this clone's UNO F4. The panda_fw_base@9d0a0046 build (DEV-9d0a0046-DEBUG)
+# was tried live on 2026-11-08: erase/write/verify all succeeded, but the app
+# crash-looped on boot (USB enumerate/disconnect ~1 Hz until DFU recovery), so
+# it is NOT shippable until its board config is matched to the vendor build.
+# On a device already running this image the flasher is a verified no-op.
+FW_SHA256 = "d0a940b472ed708f5f4e7980f33d757f109e7b48a55f7b40c4d6de34c598c311"
 SECTOR_SIZES = [0x4000] * 4 + [0x10000] + [0x20000] * 11
 BYD_LEGACY_HW_TYPES = (b'\x05', b'\x06')  # uno, dos
 FLASH_ENTRY_WAIT_S = 15
@@ -62,8 +66,21 @@ FLASH_EXIT_WAIT_S = 15
 # restart that process, so keep a small runtime counter in /dev/shm (cleared on
 # every device reboot) to stop a board stuck in bootstub from being reflashed
 # once a second forever. Writing here is runtime state, not a persistent Param.
+# NOTE: some clone devices restore /dev/shm from a persistent snapshot at boot
+# (observed 2026-11-08: marker file mtime months old after reboot), so the
+# marker name is suffixed with the kernel boot_id - a restored stale file can
+# never match the current boot.
+def _boot_scoped_marker() -> str:
+  try:
+    with open("/proc/sys/kernel/random/boot_id") as f:
+      boot_id = f.read().strip().replace("-", "")[:12]
+  except Exception:
+    boot_id = "unknownboot"
+  return f"/dev/shm/byd_long_flash_attempts.{boot_id}"
+
+
 MAX_ATTEMPTS_PER_BOOT = 3
-_ATTEMPT_MARKER = "/dev/shm/byd_long_flash_attempts"
+_ATTEMPT_MARKER = _boot_scoped_marker()
 _flash_attempted = False
 
 
