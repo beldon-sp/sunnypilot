@@ -34,6 +34,7 @@ BROADCAST_INTERVAL = 1.0
 BROADCAST_REMOTE_INTERVAL = 0.2
 BROADCAST_NETWORK_ERROR_RETRY_INTERVAL = 5.0
 BROADCAST_NETWORK_ERROR_LOG_INTERVAL = 30.0
+NAVI_HTTP_PORT = 7713  # legacy HTTP7713 server removed in db5bf3146; broadcast field kept for old carrot APK
 
 
 def limit_route_points(points, max_points=NAVI_ROUTE_MAX_POINTS):
