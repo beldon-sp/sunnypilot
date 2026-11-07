@@ -136,22 +136,65 @@ static health_t convert_legacy_health(const legacy_health_t &legacy) {
   return health;
 }
 
+// map the carrot v17 health layout (wake_on_can_pkt inserted after
+// ignition_can_pkt, 59 bytes) onto the current one; delivered with the
+// panda_fw_base@9d0a0046 BYD firmware build
+static health_t convert_carrot17_health(const carrot17_health_t &v17) {
+  health_t health {};
+  health.uptime_pkt = v17.uptime_pkt;
+  health.voltage_pkt = (uint16_t)std::min<uint32_t>(v17.voltage_pkt, 0xFFFF);
+  health.current_pkt = (uint16_t)std::min<uint32_t>(v17.current_pkt, 0xFFFF);
+  health.safety_tx_blocked_pkt = v17.safety_tx_blocked_pkt;
+  health.safety_rx_invalid_pkt = v17.safety_rx_invalid_pkt;
+  health.tx_buffer_overflow_pkt = v17.tx_buffer_overflow_pkt;
+  health.rx_buffer_overflow_pkt = v17.rx_buffer_overflow_pkt;
+  health.faults_pkt = v17.faults_pkt;
+  health.flags_pkt =
+    (v17.ignition_line_pkt ? HEALTH_FLAG_IGNITION_LINE : 0U) |
+    (v17.ignition_can_pkt ? HEALTH_FLAG_IGNITION_CAN : 0U) |
+    (v17.controls_allowed_pkt ? HEALTH_FLAG_CONTROLS_ALLOWED : 0U) |
+    (v17.power_save_enabled_pkt ? HEALTH_FLAG_POWER_SAVE_ENABLED : 0U) |
+    (v17.heartbeat_lost_pkt ? HEALTH_FLAG_HEARTBEAT_LOST : 0U) |
+    (v17.safety_rx_checks_invalid_pkt ? HEALTH_FLAG_SAFETY_RX_CHECKS_INVALID : 0U) |
+    (v17.som_reset_triggered ? HEALTH_FLAG_SOM_RESET_TRIGGERED : 0U);
+  health.car_harness_status_pkt = v17.car_harness_status_pkt <= 2U ? v17.car_harness_status_pkt : 0U;
+  health.safety_mode_pkt = v17.safety_mode_pkt;
+  health.safety_param_pkt = v17.safety_param_pkt;
+  health.fault_status_pkt = v17.fault_status_pkt <= 2U ? v17.fault_status_pkt : 0U;
+  health.alternative_experience_pkt = v17.alternative_experience_pkt;
+  health.interrupt_load_pkt = (uint8_t)std::clamp(v17.interrupt_load_pkt * 255.0f, 0.0f, 255.0f);
+  health.fan_power = v17.fan_power;
+  health.spi_error_count_pkt = v17.spi_checksum_error_count_pkt;
+  health.sbu1_voltage_mV = v17.sbu1_voltage_mV;
+  health.sbu2_voltage_mV = v17.sbu2_voltage_mV;
+  // wake_on_can_pkt / fan_stall_count have no mainline counterpart; they are
+  // dropped. sound_output_level_pkt / temperature_pkt /
+  // controls_allowed_sp_pkt stay zeroed as in the legacy path.
+  return health;
+}
+
 std::optional<health_t> Panda::get_state() {
-  // request the larger of the two layouts; the reply size identifies the
-  // firmware generation. the clone DOS firmware answers with exactly
-  // sizeof(legacy_health_t) (58) bytes; field-trimmed variants are a few
-  // bytes shorter, the shared prefix (through spi_error_count) is stable
-  // across them and the union's zero-init covers any missing tail.
+  // request the largest of the three layouts; the reply size identifies the
+  // firmware generation. mainline firmware answers with sizeof(health_t)
+  // bytes, the clone DOS firmware with sizeof(legacy_health_t) (58) bytes
+  // (field-trimmed variants are a few bytes shorter), and the carrot v17
+  // firmware with sizeof(carrot17_health_t) (59) bytes. the union's zero-init
+  // covers any missing tail.
+  static_assert(sizeof(carrot17_health_t) > sizeof(legacy_health_t));
   static_assert(sizeof(legacy_health_t) > sizeof(health_t));
   union {
     health_t health;
     legacy_health_t legacy;
+    carrot17_health_t carrot17;
   } buf {};
   int err = handle->control_read(0xd2, 0, 0, (unsigned char *)&buf, sizeof(buf));
   if (err == (int)sizeof(health_t)) {
     return buf.health;
   }
-  if (err > (int)sizeof(health_t) && err <= (int)sizeof(legacy_health_t)) {
+  if (err == (int)sizeof(carrot17_health_t)) {
+    return convert_carrot17_health(buf.carrot17);
+  }
+  if (err > (int)sizeof(health_t) && err < (int)sizeof(carrot17_health_t)) {
     return convert_legacy_health(buf.legacy);
   }
   return std::nullopt;

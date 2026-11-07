@@ -23,8 +23,9 @@
 // alternative_experience@0x2a) — the earlier carrot-mainline 59-byte guess
 // shifted every field after @33 by one byte and made the panda read back as
 // safety silent instead of byd (permanent "Controls Mismatch" alert).
-// get_state() tells the two layouts apart from the control-read size and
-// converts legacy replies, so the rest of boardd only ever sees health_t.
+// get_state() tells the three layouts apart from the control-read size and
+// converts legacy/carrot-v17 replies, so the rest of boardd only ever sees
+// health_t.
 struct __attribute__((packed)) legacy_health_t {
   uint32_t uptime_pkt;
   uint32_t voltage_pkt;
@@ -54,6 +55,43 @@ struct __attribute__((packed)) legacy_health_t {
   uint8_t som_reset_triggered;
 };
 static_assert(sizeof(legacy_health_t) == 58);
+
+// carrot v17 health layout (panda_fw_base@9d0a0046 board/health.h, HEALTH_
+// PACKET_VERSION 17): the legacy carrot-lineage layout with wake_on_can_pkt
+// inserted after ignition_can_pkt, shifting every following field by one
+// byte. Answered by the delivered BYD firmware (DEV-9d0a0046-DEBUG). Field
+// names match the firmware header; get_state() tells it apart from the other
+// two layouts by the control-read reply size (59).
+struct __attribute__((packed)) carrot17_health_t {
+  uint32_t uptime_pkt;
+  uint32_t voltage_pkt;
+  uint32_t current_pkt;
+  uint32_t safety_tx_blocked_pkt;
+  uint32_t safety_rx_invalid_pkt;
+  uint32_t tx_buffer_overflow_pkt;
+  uint32_t rx_buffer_overflow_pkt;
+  uint32_t faults_pkt;
+  uint8_t ignition_line_pkt;
+  uint8_t ignition_can_pkt;
+  uint8_t wake_on_can_pkt;
+  uint8_t controls_allowed_pkt;
+  uint8_t car_harness_status_pkt;
+  uint8_t safety_mode_pkt;
+  uint16_t safety_param_pkt;
+  uint8_t fault_status_pkt;
+  uint8_t power_save_enabled_pkt;
+  uint8_t heartbeat_lost_pkt;
+  uint16_t alternative_experience_pkt;
+  float interrupt_load_pkt;
+  uint8_t fan_power;
+  uint8_t safety_rx_checks_invalid_pkt;
+  uint16_t spi_checksum_error_count_pkt;
+  uint8_t fan_stall_count;
+  uint16_t sbu1_voltage_mV;
+  uint16_t sbu2_voltage_mV;
+  uint8_t som_reset_triggered;
+};
+static_assert(sizeof(carrot17_health_t) == 59);
 
 #define USB_TX_SOFT_LIMIT   (0x100U)
 #define USBPACKET_MAX_SIZE  (0x40)

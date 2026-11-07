@@ -14,12 +14,13 @@ never gets a firmware update. A panda without BYD_PARAM_LONGITUDINAL rejects
 the whole 0x32D/E/F ACC stream, controls_allowed never latches, and selfdrived
 raises controlsMismatch via mismatch_counter >= 200.
 
-Vendor firmware (carrotpilot/byd/byd/panda/board/obj/panda.bin.signed):
-  version DEV-6e4111d4-RELEASE, F4/UNO, contains byd_longitudinal and the
-  "byd acc inject" safety hooks. Its health packet is 57 bytes (no
-  wake_on_can_pkt, no fan_stall_count), but every field used by selfdrived's
-  controlsMismatch check is byte-aligned with the host's 58B legacy_health_t,
-  so flashing it does not introduce a new mismatch.
+Delivered firmware (panda_fw_base@9d0a0046 build, version DEV-9d0a0046-DEBUG,
+F4/UNO): full-duplex CAN relay with the camera's 0x316 blocked from the EPS so
+OP's own 50 Hz spoof is the only source, plus BYD_PARAM_LONGITUDINAL with
+transparent ACC replacement (0x32D/E/F relay + accel checks). Its health
+packet is carrot v17 (59 bytes, wake_on_can_pkt inserted after ignition_can);
+pandad's get_state() identifies it by reply size and converts, see
+selfdrive/pandad/panda.h.
 
 This module mirrors rivian_long_flasher.py: the firmware lives in the main
 repo (so OTA carries it) and flashing goes straight through the bootstub,
@@ -46,7 +47,12 @@ from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 
 FW_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "byd_long_fw.bin.signed")
-FW_SHA256 = "d0a940b472ed708f5f4e7980f33d757f109e7b48a55f7b40c4d6de34c598c311"
+# panda_fw_base@9d0a0046 build (safety_byd.h: full-duplex relay + OP-spoofed
+# 0x316, BYD_PARAM_LONGITUDINAL with transparent ACC replacement). This is the
+# architecture the sunnypilot BYD carport expects. The carrot vendor build
+# (DEV-6e4111d4-RELEASE) runs an injector architecture that blocks OP's own
+# 0x316 stream at ~50 Hz/s and must NOT be delivered here.
+FW_SHA256 = "af5174fcf8e0f3f6faca28299903c4ce7c3e2781db403bfbe029c4d4348f75b6"
 SECTOR_SIZES = [0x4000] * 4 + [0x10000] + [0x20000] * 11
 BYD_LEGACY_HW_TYPES = (b'\x05', b'\x06')  # uno, dos
 FLASH_ENTRY_WAIT_S = 15
