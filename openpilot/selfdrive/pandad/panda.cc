@@ -128,7 +128,7 @@ static health_t convert_legacy_health(const legacy_health_t &legacy) {
   health.alternative_experience_pkt = legacy.alternative_experience_pkt;
   health.interrupt_load_pkt = (uint8_t)std::clamp(legacy.interrupt_load_pkt * 255.0f, 0.0f, 255.0f);
   health.fan_power = legacy.fan_power;
-  health.spi_error_count_pkt = legacy.spi_checksum_error_count_pkt;
+  health.spi_error_count_pkt = legacy.spi_error_count_pkt;
   health.sbu1_voltage_mV = legacy.sbu1_voltage_mV;
   health.sbu2_voltage_mV = legacy.sbu2_voltage_mV;
   // sound_output_level_pkt / temperature_pkt / controls_allowed_sp_pkt have no
@@ -138,10 +138,10 @@ static health_t convert_legacy_health(const legacy_health_t &legacy) {
 
 std::optional<health_t> Panda::get_state() {
   // request the larger of the two layouts; the reply size identifies the
-  // firmware generation. legacy DOS firmwares answer with (at most)
-  // sizeof(legacy_health_t) bytes — field-trimmed variants in the wild are a
-  // few bytes shorter, the shared prefix (everything through fan_power) is
-  // stable across them and the union's zero-init covers any missing tail.
+  // firmware generation. the clone DOS firmware answers with exactly
+  // sizeof(legacy_health_t) (58) bytes; field-trimmed variants are a few
+  // bytes shorter, the shared prefix (through spi_error_count) is stable
+  // across them and the union's zero-init covers any missing tail.
   static_assert(sizeof(legacy_health_t) > sizeof(health_t));
   union {
     health_t health;

@@ -16,7 +16,13 @@
 #include "selfdrive/pandad/panda_comms.h"
 
 // legacy health_t layout answered by the pre-sunnypilot DOS firmware shipped
-// on tici devices/ clones (comma lineage up to HEALTH_PACKET_VERSION 17).
+// on tici devices/ clones: carrot-lineage HEALTH_PACKET_VERSION 16, 58 bytes,
+// WITHOUT the wake_on_can_pkt slot the mainline v17 struct gained. verified
+// field-for-field against the proven dev-tici tree's pandad binary (DWARF:
+// health_t byte_size 0x3a, controls_allowed@0x22, safety_mode@0x24,
+// alternative_experience@0x2a) — the earlier carrot-mainline 59-byte guess
+// shifted every field after @33 by one byte and made the panda read back as
+// safety silent instead of byd (permanent "Controls Mismatch" alert).
 // get_state() tells the two layouts apart from the control-read size and
 // converts legacy replies, so the rest of boardd only ever sees health_t.
 struct __attribute__((packed)) legacy_health_t {
@@ -30,7 +36,6 @@ struct __attribute__((packed)) legacy_health_t {
   uint32_t faults_pkt;
   uint8_t ignition_line_pkt;
   uint8_t ignition_can_pkt;
-  uint8_t wake_on_can_pkt;
   uint8_t controls_allowed_pkt;
   uint8_t car_harness_status_pkt;
   uint8_t safety_mode_pkt;
@@ -42,12 +47,13 @@ struct __attribute__((packed)) legacy_health_t {
   float interrupt_load_pkt;
   uint8_t fan_power;
   uint8_t safety_rx_checks_invalid_pkt;
-  uint16_t spi_checksum_error_count_pkt;
+  uint16_t spi_error_count_pkt;
   uint8_t fan_stall_count;
   uint16_t sbu1_voltage_mV;
   uint16_t sbu2_voltage_mV;
   uint8_t som_reset_triggered;
 };
+static_assert(sizeof(legacy_health_t) == 58);
 
 #define USB_TX_SOFT_LIMIT   (0x100U)
 #define USBPACKET_MAX_SIZE  (0x40)
