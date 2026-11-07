@@ -216,11 +216,11 @@ msgstr "确定要备份当前 sunnypilot 设置吗？"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
 msgid "Are you sure you want to enter Always Offroad mode?"
-msgstr "确定要进入始终离路模式吗？"
+msgstr "确定要进入始终离线模式吗？"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
 msgid "Are you sure you want to exit Always Offroad mode?"
-msgstr "确定要退出始终离路模式吗？"
+msgstr "确定要退出始终离线模式吗？"
 
 #: openpilot/selfdrive/ui/layouts/settings/device.py
 msgid "Are you sure you want to power off?"
@@ -809,7 +809,7 @@ msgstr "踩下加速踏板时脱离"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
 msgid "Disengage to Enter Always Offroad Mode"
-msgstr "脱离以进入始终离路模式"
+msgstr "脱离以进入始终离线模式"
 
 #: openpilot/selfdrive/ui/layouts/settings/device.py
 msgid "Disengage to Power Off"
@@ -997,12 +997,12 @@ msgstr "启用"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla.py
 msgid "Enable \"Always Offroad\" in Device panel, or turn vehicle off to change."
-msgstr "请在设备面板启用“始终非行车”，或熄火后再更改。"
+msgstr "请在设备面板启用“始终离线”，或熄火后再更改。"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/subaru.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla.py
 msgid "Enable \"Always Offroad\" in Device panel, or turn vehicle off to toggle."
-msgstr "在设备面板中启用“始终离路”，或关闭车辆以切换。"
+msgstr "在设备面板中启用“始终离线”，或关闭车辆以切换。"
 
 #: openpilot/selfdrive/ui/layouts/settings/developer.py
 msgid "Enable ADB"
@@ -1014,7 +1014,7 @@ msgstr "请开启自适应巡航后启用"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
 msgid "Enable Always Offroad"
-msgstr "启用始终离路"
+msgstr "启用始终离线"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/torque_settings.py
 msgid "Enable Custom Tuning"
@@ -1186,7 +1186,7 @@ msgstr "过度作动"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
 msgid "Exit Always Offroad"
-msgstr "退出始终离路"
+msgstr "退出始终离线"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/subaru.py
 msgid "Experimental feature to enable auto-resume during stop-and-go for certain supported Subaru platforms."
@@ -1801,11 +1801,11 @@ msgstr "离路"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
 msgid "Offroad: Device will be in Always Offroad mode after boot/wake-up."
-msgstr "离路：设备启动/唤醒后将进入始终离路模式。"
+msgstr "离路：设备启动/唤醒后将进入始终离线模式。"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 msgid "Only available when vehicle is off, or always offroad mode is on"
-msgstr "仅在车辆关闭或始终离路模式开启时可用"
+msgstr "仅在车辆关闭或始终离线模式开启时可用"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/display.py
 msgid "Onroad Brightness"
@@ -1932,7 +1932,7 @@ msgstr "请连接 Wi-Fi 后更新。"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/software.py
 msgid "Please enable \"Always Offroad\" mode or turn off the vehicle to adjust these toggles."
-msgstr "请启用“始终离路”模式或关闭车辆以调整这些开关。"
+msgstr "请启用“始终离线”模式或关闭车辆以调整这些开关。"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
 msgid "Please reboot and try again."
@@ -3169,7 +3169,7 @@ msgstr "设备 ID"
 
 #: openpilot/selfdrive/ui/sunnypilot/mici/layouts/settings.py
 msgid "disengage to enable always offroad"
-msgstr "脱离以启用始终离路"
+msgstr "脱离以启用始终离线"
 
 #: openpilot/selfdrive/ui/layouts/settings/device.py
 msgid "down"
@@ -3407,11 +3407,11 @@ msgstr "滑动以备份"
 
 #: openpilot/selfdrive/ui/sunnypilot/mici/layouts/settings.py
 msgid "slide to exit always offroad"
-msgstr "滑动以退出始终离路"
+msgstr "滑动以退出始终离线"
 
 #: openpilot/selfdrive/ui/sunnypilot/mici/layouts/settings.py
 msgid "slide to force offroad"
-msgstr "滑动以强制离路"
+msgstr "滑动以强制离线"
 
 #: openpilot/selfdrive/ui/sunnypilot/mici/layouts/sunnylink.py
 msgid "slide to restore"
