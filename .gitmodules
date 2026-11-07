@@ -18,5 +18,5 @@
   url = https://github.com/sunnypilot/tinygrad.git
 [submodule "sunnypilot/neural_network_data"]
 	path = openpilot/sunnypilot/neural_network_data
-  url = https://github.com/sunnypilot/neural-network-data.git
+	url = https://github.com/beldon-sp/neural-network-data.git
 
