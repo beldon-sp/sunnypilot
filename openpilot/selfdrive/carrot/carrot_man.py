@@ -204,7 +204,7 @@ class CarrotMan:
     self.gps_location_service = get_gps_location_service(self.params)
     self.sm = messaging.SubMaster([
       'deviceState', 'carState', 'controlsState', 'radarState', 'longitudinalPlan', 'modelV2',
-      'selfdriveState', 'carControl', 'navRouteNavd', self.gps_location_service,
+      'selfdriveState', 'carControl', self.gps_location_service,
       'navInstruction', 'carrotNavi',
     ])
     self.pm = messaging.PubMaster(['carrotMan', "navRoute", "navInstructionCarrot"])
@@ -288,16 +288,13 @@ class CarrotMan:
     while self.is_running:
       try:
         self.sm.update(0)
-        navd_route_updated = self.sm.updated['navRouteNavd']
-        if navd_route_updated:
-          self.send_routes(self.sm['navRouteNavd'].coordinates, True)
         carrot_navi_service_active = self.sm.alive['carrotNavi'] and self.sm.valid['carrotNavi']
         if (
-          self.sm.updated['carrotNavi'] or navd_route_updated
+          self.sm.updated['carrotNavi']
           or (self.carrot_navi_route_session_id and not carrot_navi_service_active)
         ):
           carrot_navi = parse_carrot_navi_control(self.sm['carrotNavi']) if carrot_navi_service_active else None
-          self._update_carrot_navi_route(carrot_navi, force=navd_route_updated)
+          self._update_carrot_navi_route(carrot_navi)
         remote_addr = self.remote_addr
         remote_ip = remote_addr[0] if remote_addr is not None else ""
         vturn_speed = self.carrot_curve_speed(self.sm)

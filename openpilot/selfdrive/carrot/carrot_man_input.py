@@ -13,7 +13,8 @@ def get_carrot_man(sm):
   traffic/lead stopping is handled independently by the longitudinal planner.
   """
   service = 'carrotMan'
-  if not (sm.seen[service] and sm.alive[service] and sm.valid[service]):
+  # unsubscribed service = no data, same fallback as never-published/stale (resilience spec)
+  if service not in sm.seen or not (sm.seen[service] and sm.alive[service] and sm.valid[service]):
     return None
   age = time.monotonic() - sm.recv_time[service]
   if not 0.0 <= age <= CARROT_MAN_TIMEOUT:
