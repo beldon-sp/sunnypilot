@@ -5,6 +5,8 @@ import os
 import socket
 import threading
 import time
+import traceback
+from typing import Any, Dict, Optional
 
 import numpy as np
 import psutil
@@ -19,7 +21,7 @@ from openpilot.common.hardware import PC
 
 
 from openpilot.selfdrive.carrot.carrot_serv import CarrotServ
-from openpilot.selfdrive.carrot.curve_speed import VisionCurveSpeed, curve_speed
+from openpilot.selfdrive.carrot.curve_speed import VisionCurveSpeed, curve_speed, TARGET_LAT_ACCEL, NO_LIMIT_KPH
 from openpilot.selfdrive.carrot.carrot_navi_control import CarrotNaviControl, parse_carrot_navi_control
 from openpilot.common.gps import get_gps_location_service
 
@@ -319,7 +321,6 @@ class CarrotMan:
             if ip_address != self.ip_address:
               self.ip_address = ip_address
               self.remote_addr = None
-            self.params_memory.put_nonblocking("NetworkAddress", self.ip_address)
 
             msg = self.make_send_message()
             if self.broadcast_ip is not None:
@@ -345,7 +346,6 @@ class CarrotMan:
               self.connection = None
               self.remote_addr = None
               self.ip_address = "0.0.0.0"
-              self.params_memory.put_nonblocking("NetworkAddress", self.ip_address)
               next_broadcast_time = now + BROADCAST_NETWORK_ERROR_RETRY_INTERVAL
               if now - last_network_error_log_time >= BROADCAST_NETWORK_ERROR_LOG_INTERVAL:
                 print(f"[carrot_man] broadcast skipped: {e}")
@@ -356,21 +356,18 @@ class CarrotMan:
               self.connection = None
               print(f"##### broadcast_error...: {e}")
               traceback.print_exc()
-              queue_carrot_exception_tmux_send("broadcast_version_info")
           except Exception as e:
             if self.connection:
               self.connection.close()
             self.connection = None
             print(f"##### broadcast_error...: {e}")
             traceback.print_exc()
-            queue_carrot_exception_tmux_send("broadcast_version_info")
 
         rk.keep_time()
         frame += 1
       except Exception as e:
         print(f"broadcast_version_info error...: {e}")
         traceback.print_exc()
-        queue_carrot_exception_tmux_send("broadcast_version_info")
         time.sleep(1)
 
 
@@ -471,7 +468,10 @@ class CarrotMan:
                 p1, p2, p3 = resampled_points[i], resampled_points[i + sample], resampled_points[i + sample * 2]
                 curvature = calculate_curvature(p1, p2, p3)
                 curvatures.append(curvature)
-                speed = np.interp(abs(curvature), V_CURVE_LOOKUP_BP, V_CRUVE_LOOKUP_VALS)
+                # curvature (1/m) -> target speed (kph): v=sqrt(a_lat/r) from
+                # curve_speed.TARGET_LAT_ACCEL, in kph, capped at NO_LIMIT_KPH.
+                # The ported V_CURVE_LOOKUP_* table was never defined.
+                speed = min(NO_LIMIT_KPH, math.sqrt(TARGET_LAT_ACCEL / max(abs(curvature), 1e-6)) * 3.6)
                 if abs(curvature) < 0.02:
                   speed = max(speed, self.carrot_serv.nRoadLimitSpeed)
                 speeds.append(speed)

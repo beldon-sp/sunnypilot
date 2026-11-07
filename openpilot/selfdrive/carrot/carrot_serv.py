@@ -906,12 +906,6 @@ class CarrotServ:
   def _clear_carrot_navi_traffic(self):
     if not getattr(self, "carrot_navi_traffic_active", False):
       return
-    params_memory = getattr(self, "params_memory", None)
-    if params_memory is not None:
-      try:
-        params_memory.remove("TrafficLight")
-      except Exception:
-        pass
     self.carrot_navi_traffic_active = False
 
   def _clear_carrot_navi_control(self):
@@ -1032,21 +1026,7 @@ class CarrotServ:
       self._clear_carrot_navi_traffic()
       return
 
-    params_memory = getattr(self, "params_memory", None)
-    if params_memory is None:
-      return
-    value = {
-      "distance": traffic.distance_m,
-      "lamp": traffic.lamp,
-      "remain": traffic.remain_sec,
-      "source": traffic.source,
-      "ts": time.monotonic(),
-    }
-    try:
-      params_memory.put_nonblocking("TrafficLight", json.dumps(value))
-      self.carrot_navi_traffic_active = True
-    except Exception:
-      pass
+    self.carrot_navi_traffic_active = True
 
   def _apply_carrot_navi_guidance(self, navi: CarrotNaviControl, force=False):
     current = navi.current
