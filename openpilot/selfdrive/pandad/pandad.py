@@ -13,6 +13,7 @@ from openpilot.common.hardware import HARDWARE
 from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot.selfdrive.pandad.rivian_long_flasher import flash_rivian_long
+from openpilot.sunnypilot.selfdrive.pandad.byd_long_flasher import flash_byd_long
 
 
 def get_expected_signature() -> bytes:
@@ -128,6 +129,10 @@ def main() -> None:
       if len(panda_serials):
         # custom flasher for xnor's Rivian Longitudinal Upgrade Kit
         flash_rivian_long(panda_serials)
+        # BYD clone DOS pandas (UNO/DOS F4) are dropped from SUPPORTED_DEVICES by
+        # the panda library, so deliver the vendor longitudinal firmware here.
+        # flash_panda() below skips these hw types, so H7 firmware cannot undo it.
+        flash_byd_long(panda_serials)
         # find the internal supported panda (e.g. skip external Black Panda)
         panda_serials = check_panda_support(panda_serials)
 

@@ -22,3 +22,7 @@ openpilot/common/hardware/comma/updater filter=lfs diff=lfs merge=lfs -text
 # 9.6MB of fonts is acceptable as plain blobs.
 openpilot/selfdrive/assets/fonts/OpFont-*.otf -filter -diff -merge binary
 openpilot/selfdrive/assets/fonts/NotoColorEmoji.ttf -filter -diff -merge binary
+
+# Panda firmware images ride along in OTA as plain git blobs: the fork's LFS
+# pushurl is read-only, and text/eol normalization must never touch their bytes.
+*.bin.signed -filter -diff -merge -text binary
