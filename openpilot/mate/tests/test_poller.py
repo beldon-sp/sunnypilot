@@ -134,6 +134,9 @@ class TestCarSnapshot:
     assert snap["vEgo"] == 10.0 and snap["vEgoKph"] == 36.0
     assert snap["gearShifter"] == "drive"
     assert snap["cruiseState"]["speedKph"] == 45.0
+    assert snap["cruiseState"]["speedCluster"] == 12.3  # 原样 m/s 直传，App 侧负责换算
+    # vCruise 本身即 kph（card.py 取自 VCruiseHelper）：vCruiseKph 必须原样直传，勿乘 3.6
+    assert snap["vCruise"] == 12.5 and snap["vCruiseKph"] == 12.5
     assert snap["doorOpen"] is True
     assert snap["latEnabled"] is True  # MADS enabled ∧ 非 paused
     assert snap["carrotCruise"] is False  # 本仓无此字段，恒 False 稳定帧结构

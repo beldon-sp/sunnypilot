@@ -480,8 +480,8 @@ Lead 对象（字段名与 carrotmate `Lead` 模型一致，`trackId` 即 cereal
 | `gasPressed` / `brakePressed` | bool | | 踏板踩下 |
 | `steeringAngleDeg` | float | deg | 方向盘转角 |
 | `steeringPressed` | bool | | 手在方向盘上 |
-| `cruiseState` | object | | `{enabled, available, speed, speedKph, speedCluster, standstill, nonAdaptive}` |
-| `vCruise` / `vCruiseKph` | float | m/s, km/h | 巡航设定速度 |
+| `cruiseState` | object | speed/speedCluster m/s，`speedKph` km/h | `{enabled, available, speed, speedKph, speedCluster, standstill, nonAdaptive}` |
+| `vCruise` / `vCruiseKph` | float | km/h | 巡航设定速度（openpilot `V_CRUISE_*` 语义，本身即 kph；未设定=255，勿再乘 3.6） |
 | `leftBlinker` / `rightBlinker` | bool | | 转向灯 |
 | `leftBlindspot` / `rightBlindspot` | bool | | 左/右盲区有车（CAN BSM，轮询用） |
 | `doorOpen` | bool | | 车门开启 |

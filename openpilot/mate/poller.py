@@ -145,7 +145,9 @@ def car_snapshot(cs, sm) -> dict:
       "nonAdaptive": cruise.nonAdaptive,
     },
     "vCruise": round(cs.vCruise, 3),
-    "vCruiseKph": round(cs.vCruise * MS_TO_KPH, 1),
+    # vCruise 本身即 kph（card.py 取自 VCruiseHelper 的 v_cruise_kph，V_CRUISE_* 均为
+    # kph、未设定=255），不是 m/s——勿乘 MS_TO_KPH（真车实测 30kph 曾被放大成 108）。
+    "vCruiseKph": round(cs.vCruise, 1),
     "leftBlinker": cs.leftBlinker,
     "rightBlinker": cs.rightBlinker,
     "leftBlindspot": cs.leftBlindspot,
