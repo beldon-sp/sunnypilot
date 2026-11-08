@@ -4,7 +4,7 @@
 方向盘按键、播报声音四类**边沿事件**与 2Hz 的 **frame 周期状态帧**（car/radar 段）
 通过 **WebSocket** 或 **SSE** 推给局域网客户端，并提供一次性状态快照 `GET /state`。
 
-> **协议版本：v5**（`hello.version = 5`）。v2 → v3 迁移要点见 §9；v3 → v4 变更：`frame` 新增 `carrot` 段（carrotMan 遥测）；v4 → v5 变更：`GET /state` 与 WS `snapshot` 扩展 18 个纯快照段（§5.3），kind 白名单、推送语义与鉴权均不变。
+> **协议版本：v5**（`hello.version = 5`）。v2 → v3 迁移要点见 §9；v3 → v4 变更：`frame` 新增 `carrot` 段（carrotMan 遥测）；v4 → v5 变更：`GET /state` 与 WS `snapshot` 扩展 18 个纯快照段（§5.3），kind 白名单、推送语义与鉴权均不变；v5 追加：`hello` 新增 `flavor` 字段（fork 标识，本仓为 `sunnypilot`）。
 
 ## 0. 服务定位原则与架构
 
@@ -101,7 +101,7 @@ rm /data/params/d/MateToken                          # 关
 
 | type | 触发时机 | 说明 |
 |---|---|---|
-| `hello` | 连接建立后第一条 | `{"service":"mate","version":4,"port":8083,"kinds":[...]}`；`version` 供客户端探测能力 |
+| `hello` | 连接建立后第一条 | `{"service":"mate","version":5,"flavor":"sunnypilot","port":8083,"kinds":[...]}`；`version` 供客户端探测能力，`flavor` 标识上游 fork（`sunnypilot` / `carrotpilot`），客户端据此区分数据面差异（如 `carrotMan` 与 SP 段的有无） |
 | `events` / `opstate` / `button` / `sound` / `frame` | 见 §4 | 事件/状态本体 |
 | `snapshot` | 响应 snapshot 请求 | 见 §5 |
 | `subscribed` | 响应 subscribe 请求 | `{"kinds":[...]}` 当前生效过滤 |

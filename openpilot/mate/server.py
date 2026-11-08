@@ -55,6 +55,7 @@ from openpilot.mate.poller import MatePoller
 
 PORT = int(os.environ.get("MATE_PORT", "8083"))
 PROTOCOL_VERSION = 5  # v5：kind 集不变，/state 与 WS snapshot 扩展 18 个纯快照段（见 poller.py v5 小节）；旧客户端忽略未知段即可
+FLAVOR = "sunnypilot"  # 上游 fork 标识：sunnypilot / carrotpilot，客户端据此区分数据面差异（如 carrotMan、SP 段的有无）
 ALL_KINDS = ("events", "opstate", "button", "sound", "frame")
 STATE_KINDS = ("events", "opstate", "sound")  # emit 时同步写进 /state 快照的类型；
 # frame 不在其中——其 car/radar 段由 poller 显式喂快照，kind 本身只广播不进快照
@@ -214,7 +215,7 @@ async def ws_handler(request: web.Request):
   cloudlog.event("mate ws connected", n=len(hub.clients))
   await ws.send_str(json.dumps({
     "type": "hello",
-    "data": {"service": "mate", "version": PROTOCOL_VERSION, "port": PORT, "kinds": list(ALL_KINDS)},
+    "data": {"service": "mate", "version": PROTOCOL_VERSION, "flavor": FLAVOR, "port": PORT, "kinds": list(ALL_KINDS)},
   }, ensure_ascii=False))
   for payload in hub.replay_snapshot():
     await ws.send_str(payload)
