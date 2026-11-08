@@ -12,8 +12,9 @@ mate — 车机事件实时推送服务（局域网）
 接口：
   GET /ws                 WebSocket（heartbeat 20s）
   GET /stream             SSE（?kinds=events,sound 可过滤）
-  GET /state              一次性状态快照（car/radar/opstate/events/sound +
-                          services/panda/meta 服务状态段，不周期推流）
+  GET /state                 一次性状态快照（car/radar/opstate/events/sound +
+                             services/panda/meta，v5 起再扩 18 个纯快照段
+                             device/…/params，见 poller.py v5 小节；不周期推流）
   GET /health             健康检查（不鉴权，含 poller 心跳新鲜度与 onroad 标志）
   GET /sounds/<file.wav>  播放 sound 事件对应的音效文件（随语言目录切换）
 
@@ -22,6 +23,12 @@ WS 客户端也可发 {"type":"snapshot"} 走同一条连接拿快照。协议�
 协议 v4：hello.version=4；kind 白名单 events/opstate/button/sound/frame；
 frame 增加 carrot 段（carrotMan 遥测，见 poller.carrot_snapshot）；v3 客户端收到
 版本不符的 error 后自行停止重连。
+
+协议 v5：kind 集不变；/state 与 WS snapshot 扩展 18 个纯快照段（device/peripheral/
+manager/proc/backup/temp/carParams/controls/carSP/control/plan/loc/gps/map/model/
+dmodel/odom/calib/params，见 poller.py v5 小节与 API.md §5）。旧客户端按既有约定
+忽略未知段即可，无破坏性变更。
+
 WS 鉴权失败在升级后发 {"type":"error"} 帧再关闭（SSE 仍为 HTTP 401）。
 
 可选鉴权：params 写 MateToken 后，/ws /stream /state /sounds 必须带 ?token=xxx 或
@@ -47,7 +54,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.mate.poller import MatePoller
 
 PORT = int(os.environ.get("MATE_PORT", "8083"))
-PROTOCOL_VERSION = 4  # v4：在 v3 基础上为 frame 增加 carrot 段（carrotMan 遥测）；客户端按 hello.version 探测能力，旧客户端按 PROTOCOL_MISMATCH 自行停止重连
+PROTOCOL_VERSION = 5  # v5：kind 集不变，/state 与 WS snapshot 扩展 18 个纯快照段（见 poller.py v5 小节）；旧客户端忽略未知段即可
 ALL_KINDS = ("events", "opstate", "button", "sound", "frame")
 STATE_KINDS = ("events", "opstate", "sound")  # emit 时同步写进 /state 快照的类型；
 # frame 不在其中——其 car/radar 段由 poller 显式喂快照，kind 本身只广播不进快照

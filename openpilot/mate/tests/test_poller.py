@@ -7,18 +7,37 @@ from openpilot.mate.poller import (
   FRAME_PERIOD_S,
   FrameTicker,
   SoundTracker,
+  backup_snapshot,
   button_payloads,
+  calib_snapshot,
   carrot_snapshot,
+  car_params_snapshot,
   car_snapshot,
+  car_sp_snapshot,
+  control_snapshot,
+  controls_snapshot,
+  device_snapshot,
   diff_events,
+  dmodel_snapshot,
   enum_name,
   event_to_dict,
   frame_payload,
+  gps_snapshot,
+  loc_snapshot,
+  manager_snapshot,
+  map_snapshot,
+  model_snapshot,
+  odom_snapshot,
   opstate_payload,
   panda_payload,
+  params_snapshot,
+  peripheral_snapshot,
+  plan_snapshot,
+  proc_snapshot,
   radar_snapshot,
   services_status,
   sound_payload,
+  temp_snapshot,
 )
 from openpilot.selfdrive.ui.soundd import AudibleAlert
 
@@ -333,3 +352,318 @@ class TestFrameTicker:
     assert t.tick(103.0) == {"car": {"vEgo": 1.0}}
     assert t.next_t == 103.5                   # now + period，而非连追三个周期
     assert t.car is None and t.radar is None and t.carrot is None
+
+
+# ---------------- v5 快照段 ----------------
+
+class TestDeviceSnapshots:
+  def test_device_snapshot(self):
+    ds = log.DeviceState.new_message(
+      networkType="cell4G", networkStrength="good", networkMetered=True, started=True,
+      freeSpacePercent=33.3, memoryUsagePercent=61, gpuUsagePercent=20,
+      cpuUsagePercent=[10, 20, 30], powerDrawW=5.678, somPowerDrawW=3.2,
+      cpuTempC=[45.6, 46.1], memoryTempC=44.5, maxTempC=46.1,
+      thermalZones=[{"name": "cpu0", "temp": 45.6}],
+      thermalStatus="warmDEPRECATED", fanSpeedPercentDesired=30,
+    )
+    d = device_snapshot(ds)
+    assert d["networkType"] == "cell4G" and d["networkStrength"] == "good"
+    assert d["started"] is True and d["networkMetered"] is True
+    assert d["freeSpacePercent"] == 33.3 and d["memoryUsagePercent"] == 61
+    assert d["cpuUsagePercent"] == [10.0, 20.0, 30.0]
+    assert d["powerDrawW"] == 5.68 and d["cpuTempC"] == [45.6, 46.1]
+    assert d["thermalZones"] == [{"name": "cpu0", "tempC": 45.6}]
+    assert d["thermalStatus"] == "warmDEPRECATED"
+    assert d["fanSpeedPercentDesired"] == 30
+    json.dumps(d)  # 必须始终可序列化
+
+  def test_device_snapshot_defaults_readable(self):
+    d = device_snapshot(log.DeviceState.new_message())
+    assert d["networkType"] == "none" and d["thermalStatus"] == "ok"
+    assert d["cpuUsagePercent"] == [] and d["thermalZones"] == []
+    json.dumps(d)
+
+  def test_peripheral_snapshot(self):
+    p = peripheral_snapshot(log.PeripheralState.new_message(
+      pandaType="dos", voltage=5000, current=1500, fanSpeedRpm=3200))
+    assert p == {"pandaType": "dos", "voltage": 5000, "current": 1500, "fanSpeedRpm": 3200}
+    assert peripheral_snapshot(log.PeripheralState.new_message())["pandaType"] == "unknown"
+
+  def test_manager_snapshot(self):
+    ms = log.ManagerState.new_message(processes=[
+      {"name": "card", "pid": 123, "running": True, "shouldBeRunning": True},
+      {"name": "modeld", "pid": 124, "running": False, "shouldBeRunning": False, "exitCode": 1},
+    ])
+    d = manager_snapshot(ms)
+    assert d["processes"][0] == {"name": "card", "pid": 123, "running": True, "shouldBeRunning": True, "exitCode": 0}
+    assert d["processes"][1]["exitCode"] == 1 and d["processes"][1]["running"] is False
+    json.dumps(d)
+
+  def test_proc_snapshot(self):
+    pl = log.ProcLog.new_message(
+      mem={"total": 8 * 1048576, "free": 2 * 1048576, "available": 3 * 1048576},
+      procs=[{"name": "card", "pid": 1, "cpuUser": 10.567, "cpuSystem": 2.1,
+              "numThreads": 5, "memRss": 1048576, "memPss": 900000}],
+    )
+    d = proc_snapshot(pl)
+    assert d["mem"] == {"totalMb": 8.0, "freeMb": 2.0, "availableMb": 3.0}
+    p = d["procs"][0]
+    assert p["name"] == "card" and p["cpuUser"] == 10.57 and p["cpuSystem"] == 2.1
+    assert p["rssMb"] == 1.0 and p["threads"] == 5
+    json.dumps(proc_snapshot(log.ProcLog.new_message()))  # 全默认可读
+
+  def test_backup_snapshot(self):
+    bm = custom.BackupManagerSP.new_message(
+      backupStatus="inProgress", restoreStatus="idle", backupProgress=0.5,
+      lastError="disk full", currentBackup={"deviceId": "dev1", "version": 3, "isEncrypted": True,
+                                            "createdAt": "2026-11-08T00:00:00Z"},
+    )
+    d = backup_snapshot(bm)
+    assert d["backupStatus"] == "inProgress" and d["restoreStatus"] == "idle"
+    assert d["backupProgress"] == 0.5 and d["lastError"] == "disk full"
+    assert d["currentBackup"]["deviceId"] == "dev1" and d["currentBackup"]["version"] == 3
+    assert d["currentBackup"]["isEncrypted"] is True
+    json.dumps(backup_snapshot(custom.BackupManagerSP.new_message()))  # 全默认可读
+
+  def test_temp_snapshot(self):
+    e = log.SensorEventData.new_message(timestamp=12345, source="lsm6ds3trc", temperature=30.56)
+    d = temp_snapshot(e)
+    assert d == {"timestamp": 12345, "source": "lsm6ds3trc", "temperatureC": 30.56}
+    # temperature 分支未选中：pycapnp 读取会抛，兜底为 None（客户端判读为无效）
+    assert temp_snapshot(log.SensorEventData.new_message())["temperatureC"] is None
+    json.dumps(d)
+
+
+class TestCarControlSnapshots:
+  def test_car_params_snapshot(self):
+    cp = car.CarParams.new_message(
+      brand="byd", carFingerprint="SONG PLUS DM-i", carVin="VIN123", pcmCruise=False,
+      flags=8, minSteerSpeed=5.0, wheelbase=2.76, steerRatio=15.2, steerControlType="torque",
+      openpilotLongitudinalControl=True, transmissionType="direct", radarUnavailable=True,
+      networkLocation="fwdCamera",
+    )
+    cps = custom.CarParamsSP.new_message(flags=1, safetyParam=2, pcmCruiseSpeed=True,
+                                         enableGasInterceptor=False)
+    d = car_params_snapshot(cp, cps)
+    assert d["brand"] == "byd" and d["carFingerprint"] == "SONG PLUS DM-i"
+    assert d["steerControlType"] == "torque" and d["transmissionType"] == "direct"
+    assert d["networkLocation"] == "fwdCamera" and d["openpilotLongitudinalControl"] is True
+    assert d["wheelbase"] == 2.76 and d["steerRatio"] == 15.2
+    assert d["sp"] == {"flags": 1, "safetyParam": 2, "pcmCruiseSpeed": True,
+                       "intelligentCruiseButtonManagementAvailable": False, "enableGasInterceptor": False}
+    json.dumps(car_params_snapshot(car.CarParams.new_message(), custom.CarParamsSP.new_message()))
+
+  def test_controls_snapshot(self):
+    # 本仓 ControlsState 的 state/alert 字段在 deprecated group 下（carrot 树遗留布局）
+    cs = log.ControlsState.new_message(
+      deprecated={"state": "enabled", "enabled": True, "active": True,
+                  "alertText1": "BRAKE!", "alertText2": "Risk of Collision", "alertType": "fcw",
+                  "alertStatus": "critical", "alertSize": "full", "alertSound2": "prompt",
+                  "decelForTurn": True},
+      longControlState="pid", curvature=0.01234, desiredCurvature=0.01235, forceDecel=False,
+    )
+    d = controls_snapshot(cs)
+    assert d["state"] == "enabled" and d["enabled"] is True and d["active"] is True
+    assert d["alertText1"] == "BRAKE!" and d["alertType"] == "fcw"
+    assert d["alertStatus"] == "critical" and d["alertSize"] == "full"
+    assert d["alertSound"] == "prompt" and d["longControlState"] == "pid"
+    assert d["curvature"] == 0.01234 and d["decelForTurn"] is True
+    json.dumps(controls_snapshot(log.ControlsState.new_message()))  # 全默认可读
+
+  def test_car_sp_snapshot(self):
+    assert car_sp_snapshot(custom.CarStateSP.new_message(speedLimit=13.89)) == {"speedLimit": 13.89}
+    assert car_sp_snapshot(custom.CarStateSP.new_message()) == {"speedLimit": 0.0}
+
+  def test_control_snapshot(self):
+    cc = car.CarControl.new_message(
+      enabled=True, latActive=True, longActive=True, leftBlinker=True,
+      currentCurvature=0.01,
+      actuators={"torque": 0.52, "steeringAngleDeg": 12.3, "accel": -0.4, "gas": 0.2,
+                 "brake": 0.0, "longControlState": "pid", "torqueOutputCan": 256.5, "speed": 12.0},
+      hudControl={"setSpeed": 60.0, "visualAlert": "steerRequired", "leadDistanceBars": 2,
+                  "leadVisible": True, "leftLaneVisible": True},
+      cruiseControl={"resume": False, "override": True},
+    )
+    ccsp = custom.CarControlSP.new_message(mads={"enabled": True, "active": True,
+                                                 "available": True, "state": "enabled"})
+    d = control_snapshot(cc, ccsp)
+    assert d["enabled"] is True and d["latActive"] is True and d["leftBlinker"] is True
+    a = d["actuators"]
+    assert a["torque"] == 0.52 and a["gas"] == 0.2 and a["torqueOutputCan"] == 256.5
+    assert a["longControlState"] == "pid"
+    assert d["hud"]["setSpeed"] == 60.0 and d["hud"]["visualAlert"] == "steerRequired"
+    assert d["hud"]["leadDistanceBars"] == 2 and d["hud"]["leadVisible"] is True
+    assert d["cruise"] == {"cancel": False, "resume": False, "override": True}
+    assert d["mads"] == {"enabled": True, "active": True, "available": True, "state": "enabled"}
+    json.dumps(control_snapshot(car.CarControl.new_message(), custom.CarControlSP.new_message()))
+
+  def test_plan_snapshot(self):
+    lp = log.LongitudinalPlan.new_message(
+      hasLead=True, fcw=False, longitudinalPlanSource="lead0", aTarget=-0.52,
+      shouldStop=False, allowThrottle=False, allowBrake=True, accelBoost=0.1,
+      accels=[0.1, -0.2], speeds=[20.0, 19.8], jerks=[-0.1, -0.1], processingDelay=0.012,
+    )
+    lpsp = custom.LongitudinalPlanSP.new_message(
+      longitudinalPlanSource="speedLimitAssist", vTarget=24.0, aTarget=-0.3,
+      smartCruiseControl={"vision": {"state": "entering", "enabled": True, "active": True,
+                                    "vTarget": 18.0, "aTarget": -0.5,
+                                    "currentLateralAccel": 1.2, "maxPredictedLateralAccel": 2.5},
+                          "map": {"state": "enabled"}},
+      speedLimit={"resolver": {"speedLimit": 25.0, "distToSpeedLimit": 300.0, "source": "map",
+                               "speedLimitOffset": 5.0, "speedLimitFinal": 30.0, "speedLimitValid": True},
+                  "assist": {"state": "adapting", "enabled": True, "active": True,
+                             "vTarget": 25.0, "aTarget": -0.8}},
+      e2eAlerts={"greenLightAlert": True},
+    )
+    lmp = log.LateralManeuverPlan.new_message(desiredCurvature=0.01234)
+    d = plan_snapshot(lp, lpsp, lmp)
+    assert d["hasLead"] is True and d["source"] == "lead0"
+    assert d["aTarget"] == -0.52 and d["allowBrake"] is True
+    assert d["accels"] == [0.1, -0.2] and d["speeds"] == [20.0, 19.8] and d["jerks"] == [-0.1, -0.1]
+    assert d["desiredCurvature"] == 0.01234
+    sp = d["sp"]
+    assert sp["source"] == "speedLimitAssist" and sp["vTarget"] == 24.0
+    assert sp["sccVision"]["state"] == "entering" and sp["sccVision"]["maxPredictedLateralAccel"] == 2.5
+    assert sp["sccMap"]["state"] == "enabled"
+    assert sp["speedLimit"]["speed"] == 25.0 and sp["speedLimit"]["source"] == "map"
+    assert sp["speedLimit"]["final"] == 30.0 and sp["speedLimit"]["assistState"] == "adapting"
+    assert sp["e2eAlerts"] == {"greenLight": True, "leadDepart": False}
+    json.dumps(plan_snapshot(log.LongitudinalPlan.new_message(),
+                             custom.LongitudinalPlanSP.new_message(),
+                             log.LateralManeuverPlan.new_message()))
+
+
+class TestLocGpsMapSnapshots:
+  def test_loc_snapshot(self):
+    llk = log.LiveLocationKalman.new_message(
+      status="valid", unixTimestampMillis=1791472951467, gpsWeek=2380, gpsTimeOfWeek=123.45,
+      inputsOK=True, gpsOK=True, sensorsOK=True, deviceStable=True,
+      timeSinceReset=12.3, timeToFirstFix=1.5,
+      positionGeodetic={"value": [31.2345678, 121.4567890, 10.0], "std": [1.0, 1.0, 2.0], "valid": True},
+      velocityNED={"value": [10.0, 0.1, 0.0], "std": [0.1, 0.1, 0.1], "valid": True},
+      orientationNED={"value": [0.0, 0.0, 1.57], "std": [0.01, 0.01, 0.02], "valid": True},
+    )
+    d = loc_snapshot(llk)
+    assert d["status"] == "valid" and d["unixTimestampMillis"] == 1791472951467
+    assert d["posGeodetic"]["value"] == [31.2345678, 121.456789, 10.0]
+    assert d["posGeodetic"]["valid"] is True
+    assert d["velNED"]["value"] == [10.0, 0.1, 0.0]
+    assert d["orientationNED"]["value"] == [0.0, 0.0, 1.57]
+    assert d["gpsOK"] is True and d["timeToFirstFix"] == 1.5
+    json.dumps(loc_snapshot(log.LiveLocationKalman.new_message()))  # 全默认可读
+
+  def test_gps_snapshot(self):
+    g = log.GpsLocationData.new_message(
+      latitude=31.2345678, longitude=121.4567890, altitude=10.5, speed=10.2, bearingDeg=90.5,
+      horizontalAccuracy=2.0, verticalAccuracy=4.0, bearingAccuracyDeg=1.0, speedAccuracy=0.5,
+      unixTimestampMillis=1791472951000, source="ublox", vNED=[10.2, 0.0, 0.0],
+      hasFix=True, satelliteCount=12,
+    )
+    d = gps_snapshot(g)
+    assert d["latitude"] == 31.2345678 and d["longitude"] == 121.456789
+    assert d["speed"] == 10.2 and d["bearingDeg"] == 90.5
+    assert d["source"] == "ublox" and d["hasFix"] is True and d["satelliteCount"] == 12
+    assert d["vNED"] == [10.2, 0.0, 0.0]
+    json.dumps(gps_snapshot(log.GpsLocationData.new_message()))
+
+  def test_map_snapshot(self):
+    lmd = custom.LiveMapDataSP.new_message(
+      speedLimitValid=True, speedLimit=25.0, speedLimitAheadValid=True, speedLimitAhead=30.0,
+      speedLimitAheadDistance=500.5, roadName="G4 京港澳高速")
+    d = map_snapshot(lmd)
+    assert d["speedLimitValid"] is True and d["speedLimit"] == 25.0
+    assert d["speedLimitAhead"] == 30.0 and d["speedLimitAheadDistance"] == 500.5
+    assert d["roadName"] == "G4 京港澳高速"
+    json.dumps(map_snapshot(custom.LiveMapDataSP.new_message()))
+
+
+class TestModelSnapshots:
+  def test_model_snapshot(self):
+    m = log.ModelDataV2.new_message(
+      frameId=100, frameDropPerc=0.0, modelExecutionTime=0.008, big=True, confidence="green",
+      meta={"engagedProb": 0.95, "hardBrakePredicted": False,
+            "laneChangeState": "laneChangeStarting", "laneChangeDirection": "left"},
+      action={"desiredCurvature": 0.01234, "desiredAcceleration": -0.2, "shouldStop": False},
+      laneLineProbs=[0.9, 0.8, 0.7, 0.6], laneLineStds=[0.1, 0.2, 0.2, 0.3],
+      leadsV3=[{"prob": 0.92, "probTime": 0.0, "t": [0.0, 0.1], "x": [30.5, 31.0],
+                "y": [-1.2, -1.2], "v": [25.0, 25.1], "a": [-1.0, -1.0]}],
+    )
+    msp = custom.ModelDataV2SP.new_message(
+      laneTurnDirection="turnLeft", leftLaneChangeEdgeBlock=False, rightLaneChangeEdgeBlock=True,
+      modelCurvature=0.012, blendfulCurvature=0.013, blendfulTrust=0.8,
+      blendfulGoingAround=False, blendfulLeftProb=0.9, blendfulRightProb=0.1, blendfulLaneWidth=3.5)
+    d = model_snapshot(m, msp)
+    assert d["frameId"] == 100 and d["big"] is True and d["confidence"] == "green"
+    assert d["engagedProb"] == 0.95 and d["hardBrakePredicted"] is False
+    assert d["laneChangeState"] == "laneChangeStarting" and d["laneChangeDirection"] == "left"
+    assert d["action"] == {"desiredCurvature": 0.01234, "desiredAcceleration": -0.2, "shouldStop": False}
+    assert d["laneLineProbs"] == [0.9, 0.8, 0.7, 0.6]
+    # leads 只留 t=0 首采样
+    assert d["leads"] == [{"prob": 0.92, "probTime": 0.0, "t": 0.0, "x": 30.5, "y": -1.2, "v": 25.0, "a": -1.0}]
+    assert d["sp"]["laneTurnDirection"] == "turnLeft" and d["sp"]["rightLaneChangeEdgeBlock"] is True
+    assert d["sp"]["modelCurvature"] == 0.012 and d["sp"]["blendfulTrust"] == 0.8
+    json.dumps(model_snapshot(log.ModelDataV2.new_message(), custom.ModelDataV2SP.new_message()))
+
+  def test_dmodel_snapshot(self):
+    dm = log.DrivingModelData.new_message(
+      frameId=200, modelExecutionTime=0.007, big=False,
+      action={"desiredCurvature": 0.01, "desiredAcceleration": 0.0, "shouldStop": False},
+      laneLineMeta={"leftY": -1.8, "rightY": 1.9, "leftProb": 0.92, "rightProb": 0.88},
+      meta={"laneChangeState": "off"},
+      path={"xCoefficients": [0.0, 0.0, 0.0, 0.0], "yCoefficients": [0.1, 0.2, 0.3, 0.4],
+            "zCoefficients": [0.0, 0.0, 0.0, 0.0]},
+    )
+    d = dmodel_snapshot(dm)
+    assert d["frameId"] == 200 and d["big"] is False
+    assert d["laneLineMeta"] == {"leftY": -1.8, "rightY": 1.9, "leftProb": 0.92, "rightProb": 0.88}
+    assert d["laneChangeState"] == "off"
+    assert d["path"]["y"] == [0.1, 0.2, 0.3, 0.4]
+    assert d["action"]["desiredCurvature"] == 0.01
+    json.dumps(dmodel_snapshot(log.DrivingModelData.new_message()))
+
+  def test_odom_snapshot(self):
+    co = log.CameraOdometry.new_message(
+      frameId=300, trans=[10.2, 0.1, 0.0], rot=[0.0, 0.0, 0.012],
+      transStd=[0.1, 0.1, 0.1], rotStd=[0.01, 0.01, 0.01],
+      wideFromDeviceEuler=[0.0, 0.0, 0.01], wideFromDeviceEulerStd=[0.01, 0.01, 0.01])
+    d = odom_snapshot(co)
+    assert d["frameId"] == 300
+    assert d["trans"] == [10.2, 0.1, 0.0] and d["rot"] == [0.0, 0.0, 0.012]
+    assert d["transStd"] == [0.1, 0.1, 0.1]
+    json.dumps(odom_snapshot(log.CameraOdometry.new_message()))
+
+
+class TestCalibParamsSnapshots:
+  def test_calib_snapshot(self):
+    ec = log.ExtrinsicsCalibration.new_message(
+      calStatus="calibrated", calPerc=100, calCycle=5, validBlocks=20,
+      rpyCalib=[0.0, -0.02, 0.123], rpyCalibSpread=[0.001, 0.001, 0.002],
+      height=[0.5], wideFromDeviceEuler=[0.0, 0.0, 0.01],
+      extrinsicMatrix=[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
+    d = calib_snapshot(ec)
+    assert d["status"] == "calibrated" and d["calPerc"] == 100 and d["validBlocks"] == 20
+    assert d["rpyCalib"] == [0.0, -0.02, 0.123]
+    assert d["extrinsicMatrix"][0] == 1.0 and len(d["extrinsicMatrix"]) == 9
+    json.dumps(calib_snapshot(log.ExtrinsicsCalibration.new_message()))
+
+  def test_params_snapshot(self):
+    ltp = log.LateralTorqueParameters.new_message(
+      valid=True, useParams=True, calPerc=80,
+      latAccelFactorRaw=8.5, latAccelOffsetRaw=0.1, frictionCoefficientRaw=0.06,
+      latAccelFactorFiltered=8.4, latAccelOffsetFiltered=0.12, frictionCoefficientFiltered=0.07)
+    ld = log.LateralDelay.new_message(lateralDelay=0.24, lateralDelayEstimate=0.25,
+                                      lateralDelayEstimateStd=0.01, validBlocks=15,
+                                      status="estimated")
+    vp = log.VehicleParameters.new_message(valid=True, steerRatio=15.2, steerRatioValid=True,
+                                           stiffnessFactor=1.05, stiffnessFactorValid=True,
+                                           angleOffsetDeg=0.1, angleOffsetAverageDeg=0.05,
+                                           angleOffsetAverageValid=True, roll=0.001)
+    d = params_snapshot(ltp, ld, vp)
+    assert d["latTorque"]["latAccelFactorFiltered"] == 8.4 and d["latTorque"]["useParams"] is True
+    assert d["lateralDelay"] == {"lateralDelay": 0.24, "estimate": 0.25, "estimateStd": 0.01,
+                                 "validBlocks": 15, "status": "estimated"}
+    assert d["vehicle"]["steerRatio"] == 15.2 and d["vehicle"]["stiffnessFactor"] == 1.05
+    assert d["vehicle"]["angleOffsetAverageDeg"] == 0.05 and d["vehicle"]["roll"] == 0.001
+    json.dumps(params_snapshot(log.LateralTorqueParameters.new_message(),
+                               log.LateralDelay.new_message(),
+                               log.VehicleParameters.new_message()))

@@ -4,7 +4,7 @@
 方向盘按键、播报声音四类**边沿事件**与 2Hz 的 **frame 周期状态帧**（car/radar 段）
 通过 **WebSocket** 或 **SSE** 推给局域网客户端，并提供一次性状态快照 `GET /state`。
 
-> **协议版本：v4**（`hello.version = 4`）。v2 → v3 迁移要点见 §9；v3 → v4 变更：`frame` 新增 `carrot` 段（carrotMan 遥测），kind 白名单与鉴权语义不变。
+> **协议版本：v5**（`hello.version = 5`）。v2 → v3 迁移要点见 §9；v3 → v4 变更：`frame` 新增 `carrot` 段（carrotMan 遥测）；v4 → v5 变更：`GET /state` 与 WS `snapshot` 扩展 18 个纯快照段（§5.3），kind 白名单、推送语义与鉴权均不变。
 
 ## 0. 服务定位原则与架构
 
@@ -84,6 +84,8 @@ rm /data/params/d/MateToken                          # 关
 | `button` | 方向盘按键按下/松开（边沿帧） | ✘ | ✘ |
 | `sound` | 播报声音切换（含 carrot 倒计时报数） | ✔ | ✔（正在播报时） |
 | `frame` | **2Hz 周期状态帧**（car/radar 段，驾驶屏连续值） | ✘（段进快照） | ✘（走快照） |
+
+> v5 起 kind 集不变；扩展全部落在 `/state` 与 WS `snapshot` 的状态段上（§5.3）。
 
 ---
 
@@ -417,11 +419,19 @@ Lead 对象（字段名与 carrotmate `Lead` 模型一致，`trackId` 即 cereal
     "events":   { "ts": 1791472947.925, "data": { "added": [...], "removed": [...], "active": [...] } },
     "sound":    { "ts": 1791472948.300, "data": { "sound": "stopStop", "...": "..." } },
     "panda":    { "ts": 1791472951.380, "data": { "count": 1, "pandas": [ "..." ] } },
+    "device":   { "ts": 1791472951.405, "data": { "networkType": "cell4G", "maxTempC": 46.1, "...": "..." } },
+    "carParams": { "ts": 1791472000.000, "data": { "brand": "byd", "carFingerprint": "...", "sp": { "...": "..." } } },
+    "controls": { "ts": 1791472951.410, "data": { "state": "enabled", "alertText1": "...", "...": "..." } },
+    "plan":     { "ts": 1791472951.415, "data": { "aTarget": -0.52, "sp": { "...": "..." }, "...": "..." } },
+    "loc":      { "ts": 1791472951.418, "data": { "posGeodetic": { "value": [31.2, 121.4, 10.0], "...": "..." } } },
     "services": { "ts": 1791472951.420, "data": { "carState": { "...": "..." }, "...": "..." } },
     "meta":     { "ts": 1791472951.420, "data": { "frame": 41233, "onroad": false } }
   }
 }
 ```
+
+> 以上为节选。v5 全部新增段（device/peripheral/manager/proc/backup/temp/carParams/
+> controls/carSP/control/plan/loc/gps/map/model/dmodel/odom/calib/params）见 §5.3。
 
 - 每段自带 `ts`（Unix 墙钟秒，车机时钟错时自行对齐），客户端据此判断新鲜度
 - **未收到过的数据段不出现**（offroad 刚启动时 `car`/`opstate` 可能缺失；
@@ -499,6 +509,88 @@ Lead 对象（字段名与 carrotmate `Lead` 模型一致，`trackId` 即 cereal
 
 > 快照在 card 停发（offroad）后保持最后一次 onroad 值，新鲜度看 `car.ts`。
 
+### 5.3 v5 新增快照段（18 段）
+
+v5 在 `/state` 与 WS `snapshot` 中新增以下状态段。与 `meta`/`services`/`panda` 同机制：
+
+- **纯快照段**：只进 `/state` 与 WS `snapshot`，不进事件流广播、不补发
+- **出现规则**：对应数据源收到过至少一帧才出现（offroad 未跑的进程其段不出现）
+- **组合段**：`carParams`/`control`/`plan`/`model`/`params` 为多 topic 合成，任一来源更新即整体重建
+- **体积**：全段齐全时 `/state` 约 15-25KB（`proc` 段占大头，随进程数浮动），按需拉取即可
+
+| 段 | 数据源 topic | 频率 | 内容 |
+|---|---|---|---|
+| `device` | deviceState | 2Hz | 设备网络/存储/内存/温度/热状态/风扇 |
+| `peripheral` | peripheralState | 2Hz | panda 外设：电压/电流/风扇转速 |
+| `manager` | managerState | 2Hz | 各进程存活状态（running/shouldBeRunning/exitCode） |
+| `proc` | procLog | 0.5Hz | 内存总量 + 逐进程 CPU/内存（运维看板） |
+| `backup` | backupManagerSP | 1Hz | sunnypilot 备份/恢复状态与进度 |
+| `temp` | temperatureSensor | 2Hz | 传感器温度（匿名 union，未选中时 `temperatureC=null`） |
+| `carParams` | carParams + carParamsSP | 0.02Hz | 车辆身份与动力学参数（静态），SP 子对象 |
+| `controls` | controlsState | 100Hz | 控制器状态与完整告警字段（取最新） |
+| `carSP` | carStateSP | 100Hz | sunnypilot 扩展车辆状态（speedLimit 等） |
+| `control` | carControl + carControlSP | 100Hz | op 实际下发执行器指令 + HUD 提示（取最新） |
+| `plan` | longitudinalPlan + longitudinalPlanSP + lateralManeuverPlan | 20Hz | 纵向规划序列 + SP 智能巡航/限速辅助 |
+| `loc` | liveLocationKalman | 20Hz | EKF 融合定位（经纬/速度/姿态，车机 GNSS+IMU） |
+| `gps` | gpsLocationExternal | 10Hz | 原始 GNSS（低精度兜底，与 `loc` 互补） |
+| `map` | liveMapDataSP | 1Hz | 在线地图限速/前方限速/路名（mapd 拉取，非客户端上行） |
+| `model` | modelV2 + modelDataV2SP | 20Hz | 模型元信息/决策摘要/前车首采样，SP 子对象 |
+| `dmodel` | drivingModelData | 20Hz | UI 驾驶模型：路径多项式系数/车道线置信度 |
+| `odom` | cameraOdometry | 20Hz | 视觉里程计（速度/角速度 + 标准差） |
+| `calib` | extrinsicsCalibration | 4Hz | 相机标定状态/外参/rpy |
+| `params` | lateralTorqueParameters + lateralDelay + vehicleParameters | 4-20Hz | 扭矩参数标定/横向延迟/在线动力学估计 |
+
+各段枚举均为字符串（`enum_name`），未知值回退 `"unknown"`，客户端按容错处理。
+
+#### `device` 段字段
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `networkType` | string | `none`/`wifi`/`cell2G`…`cell5G`/`ethernet` |
+| `networkStrength` | string | `unknown`/`poor`/`moderate`/`good`/`great` |
+| `networkMetered` | bool | 计费网络 |
+| `started` | bool | openpilot 已上电（IsOnroad 语义外的设备 started 标志） |
+| `freeSpacePercent` / `memoryUsagePercent` / `gpuUsagePercent` | float/int | 存储剩余/内存/GPU 占用 |
+| `cpuUsagePercent` | float[] | 逐核 CPU 占用 |
+| `powerDrawW` / `somPowerDrawW` | float | 整机/SOM 功耗 W |
+| `cpuTempC` / `gpuTempC` / `memoryTempC` / `maxTempC` | 数值/数组 | 板温明细（℃） |
+| `thermalZones` | list | `{name, tempC}` 逐热区温度 |
+| `thermalStatus` | string | `ok`/`overheated`/`critical`（本仓无 `warm`） |
+| `fanSpeedPercentDesired` | int | 风扇目标转速百分比 |
+
+#### `peripheral` / `manager` / `proc` / `backup` / `temp` 段
+
+- `peripheral`：`pandaType`（枚举，`unknown`/`whitePanda`…`tres`/`cuatro`）、`voltage`、`current`、`fanSpeedRpm`
+- `manager`：`processes[] = {name, pid, running, shouldBeRunning, exitCode}`——`shouldBeRunning=true && running=false` 即进程挂了，配合 exitCode 排查
+- `proc`：`mem = {totalMb, freeMb, availableMb}` + `procs[] = {name, pid, cpuUser, cpuSystem, threads, rssMb, pssMb}`（CPU 为累计占用百分比，可直接排序取 Top）
+- `backup`：`backupStatus`/`restoreStatus`（`idle`/`inProgress`/`completed`/`failed`）、`backupProgress`/`restoreProgress`（0-1）、`lastError`、`currentBackup = {deviceId, version, isEncrypted, createdAt, updatedAt}`
+- `temp`：`timestamp`、`source`（传感器枚举）、`temperatureC`——temperatureSensor 的 union 未选中温度分支时为 `null`
+
+#### `carParams` / `carSP` / `controls` / `control` 段
+
+- `carParams`：`brand`、`carFingerprint`、`carVin`、`fuzzyFingerprint`、`passive`、`pcmCruise`、`flags`、`minEnableSpeed`/`minSteerSpeed`/`maxLateralAccel`、`wheelbase`/`centerToFront`/`steerRatio`、`steerControlType`（`torque`/`angle`/`curvature`）、`radarUnavailable`、`steerActuatorDelay`/`longitudinalActuatorDelay`、`openpilotLongitudinalControl`、`transmissionType`、`networkLocation` 等 + `sp = {flags, safetyParam, pcmCruiseSpeed, intelligentCruiseButtonManagementAvailable, enableGasInterceptor}`
+- `carSP`：`speedLimit`（sunnypilot 扩展车速上限，m/s，原样直传）
+- `controls`：`state`/`enabled`/`active`（与 opstate 段同语义的控制器侧视图）、`alertText1/2`、`alertType`、`alertStatus`/`alertSize`/`alertSound`（完整告警三件套）、`longControlState`（`off`/`pid`/`stopping`/`starting`）、`curvature`/`desiredCurvature`、`forceDecel`/`decelForTurn`/`decelForModel`
+  > 本仓 ControlsState 的这些字段在 capnp `deprecated :group` 下（carrot 树遗留布局），mate 已做映射，客户端无感。
+- `control`：`enabled`/`latActive`/`longActive`、`leftBlinker`/`rightBlinker`、`currentCurvature`、`actuators = {torque, steeringAngleDeg, curvature, accel, jerk, gas, brake, torqueOutputCan, speed, longControlState}`（op 实际下发值）、`hud = {setSpeed, visualAlert, leadDistanceBars, speedVisible, lanesVisible, leadVisible, leftLaneVisible, rightLaneVisible, leftLaneDepart, rightLaneDepart}`、`cruise = {cancel, resume, override}`、`mads = {enabled, active, available, state}`（carControlSP）
+
+#### `plan` / `loc` / `gps` / `map` 段
+
+- `plan`：`hasLead`/`fcw`、`source`、`aTarget`、`shouldStop`/`allowThrottle`/`allowBrake`、`accelBoost`、`accels[]`/`speeds[]`/`jerks[]`（未来 2.5s 规划序列，20Hz×50 点）、`processingDelay`/`solverExecutionTime`、`desiredCurvature`（lateralManeuverPlan）+ `sp = {source, vTarget, aTarget, sccVision = {state, enabled, active, vTarget, aTarget, currentLateralAccel, maxPredictedLateralAccel}, sccMap = {…}, speedLimit = {valid, speed, dist, source, offset, final, assistState, assistEnabled, assistActive, assistVTarget, assistATarget}, e2eAlerts = {greenLight, leadDepart}}`
+  > `speedLimit.speed` 单位 m/s；`sccVision.state` 取值 `disabled/enabled/entering/turning/leaving/overriding`，`assistState` 取值 `disabled/inactive/preActive/pending/adapting/active`
+- `loc`：`status`（`uninitialized`/`uncalibrated`/`valid`）、`unixTimestampMillis`、`gpsWeek`/`gpsTimeOfWeek`、`inputsOK`/`posenetOK`/`gpsOK`/`sensorsOK`/`deviceStable`/`excessiveResets`、`timeSinceReset`/`timeToFirstFix`、`posGeodetic = {value: [lat, lon, alt], std, valid}`（lat/lon 度、alt 米）、`velNED`、`accelDevice`、`orientationNED`（同为 Measurement 三元组）
+  > 航向可由 `velNED.value` 推导：`bearing = atan2(vE, vN)`
+- `gps`：`latitude`/`longitude`/`altitude`、`speed`（m/s）、`bearingDeg`、`horizontalAccuracy`/`verticalAccuracy`/`bearingAccuracyDeg`/`speedAccuracy`、`unixTimestampMillis`、`source`、`vNED`、`hasFix`、`satelliteCount`
+- `map`：`speedLimitValid`/`speedLimit`、`speedLimitAheadValid`/`speedLimitAhead`/`speedLimitAheadDistance`、`roadName`（mapd 从在线地图拉取，属 op 独有数据，不违反 §0 回推原则）
+
+#### `model` / `dmodel` / `odom` / `calib` / `params` 段
+
+- `model`：`frameId`/`frameDropPerc`/`modelExecutionTime`/`big`、`confidence`（`red`/`yellow`/`green`）、`engagedProb`、`hardBrakePredicted`、`laneChangeState`/`laneChangeDirection`、`action = {desiredCurvature, desiredAcceleration, shouldStop}`、`laneLineProbs[]`/`laneLineStds[]`、`leads[]`（LeadDataV3 的 t=0 首采样摘要 `{prob, probTime, t, x, y, v, a}`，完整逐点序列体积大不进快照）+ `sp = {laneTurnDirection, leftLaneChangeEdgeBlock, rightLaneChangeEdgeBlock, modelCurvature, blendfulCurvature, blendfulTrust, blendfulGoingAround, blendfulLeftProb, blendfulRightProb, blendfulLaneWidth}`
+- `dmodel`：`frameId`/`frameDropPerc`/`modelExecutionTime`/`big`、`action`（同上）、`laneLineMeta = {leftY, rightY, leftProb, rightProb}`、`laneChangeState`/`laneChangeDirection`、`path = {x, y, z}`（三次多项式系数，非逐点序列）
+- `odom`：`frameId`、`trans`/`rot`（设备系速度 m/s / 角速度 rad/s）、`transStd`/`rotStd`、`wideFromDeviceEuler`/`wideFromDeviceEulerStd`
+- `calib`：`status`（`uncalibrated`/`calibrated`/`invalid`/`recalibrating`）、`calPerc`/`calCycle`/`validBlocks`、`rpyCalib`/`rpyCalibSpread`/`height`/`wideFromDeviceEuler`、`extrinsicMatrix`（3x3 行优先）
+- `params`：`latTorque = {valid, useParams, calPerc, latAccelFactorRaw/Filtered, latAccelOffsetRaw/Filtered, frictionCoefficientRaw/Filtered}`、`lateralDelay = {lateralDelay, estimate, estimateStd, validBlocks, status}`、`vehicle = {valid, steerRatio, steerRatioValid, stiffnessFactor, stiffnessFactorValid, angleOffsetDeg, angleOffsetValid, angleOffsetAverageDeg, angleOffsetAverageValid, roll}`
+
 ---
 
 ## 6. 其余接口
@@ -573,3 +665,12 @@ cd /data/openpilot && source launch_env.sh && python -m openpilot.mate
 | WS 鉴权失败 | HTTP 401（握手失败，客户端只见连接错误） | 升级后 `error` 帧 → 关闭 | 增加 `error` 分支，按消息语义提示配对失败，禁止盲目重试 |
 | car 段 | — | 新增 `fuelGauge`/`charging` | 全可空模型自然容忍；需要时展示 |
 | 快照段 | 含 `navi` 段 | `navi` 段移除，新增 `radar` 段 | 初始化解析去 navi；前车距离初始化改读 `radar` 段 |
+
+### v4 → v5 迁移要点
+
+| 变化 | v4 | v5 | 客户端动作 |
+|---|---|---|---|
+| `hello.version` | 4 | 5 | 按版本探测能力；未知段一律忽略 |
+| `/state` 与 WS `snapshot` | 8 段（car/radar/opstate/events/sound/panda/services/meta） | **新增 18 个纯快照段**（§5.3） | 老客户端无需改动（未知段忽略）；要消费新段（设备看板/规划/定位等）直接读对应段 |
+| kind 白名单 | events/opstate/button/sound/frame | 不变 | 无 |
+| 推送语义 | 边沿事件 + 2Hz frame | 不变（扩展全部在拉取侧快照） | 无 |
