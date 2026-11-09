@@ -20,14 +20,14 @@ mate — 车机事件实时推送服务（局域网）
 
 WS 客户端也可发 {"type":"snapshot"} 走同一条连接拿快照。协议文档见 mate/API.md。
 
-协议 v4：hello.version=4；kind 白名单 events/opstate/button/sound/frame；
-frame 增加 carrot 段（carrotMan 遥测，见 poller.carrot_snapshot）；v3 客户端收到
-版本不符的 error 后自行停止重连。
-
-协议 v5：kind 集不变；/state 与 WS snapshot 扩展 18 个纯快照段（device/peripheral/
-manager/proc/backup/temp/carParams/controls/carSP/control/plan/loc/gps/map/model/
-dmodel/odom/calib/params，见 poller.py v5 小节与 API.md §5）。旧客户端按既有约定
-忽略未知段即可，无破坏性变更。
+协议 v5（当前，PROTOCOL_VERSION = 5，FLAVOR = "sunnypilot"）：kind 集
+events/opstate/button/sound/frame 不变；hello 带 fork 标识 flavor（客户端门控主键，
+非本 fork 的客户端按协议不匹配处理）；frame 含 carrot 段（carrotMan 遥测，v4 引入）；
+/state 与 WS snapshot 扩展 19 个纯快照段（device/peripheral/manager/proc/backup/temp/
+carParams/controls/carSP/control/plan/loc/gps/map/model/dmodel/odom/calib/params，
+见 poller.py v5 小节与 API.md §5.3——文档计数写作 18，以段名列表为准）。旧客户端按
+既有约定忽略未知段/未知字段即可，无破坏性变更。历史：v4 = frame 增加 carrot 段；
+v3 = kind 收窄 + 2Hz frame（v3 客户端收到版本不符的 error 后自行停止重连）。
 
 WS 鉴权失败在升级后发 {"type":"error"} 帧再关闭（SSE 仍为 HTTP 401）。
 
