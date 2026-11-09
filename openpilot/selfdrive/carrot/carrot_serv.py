@@ -219,8 +219,8 @@ class CarrotServ:
     self.debugText = ""
 
     # 默认语言，稍后在 update_params 中从 Params 读取覆盖，
-    # 规则：main_ko -> 韩语；main_zh-CHS -> 中文；其他 -> 英文
-    self.lang = "en"
+    # 规则：ko -> 韩语；zh-CHS -> 中文；其他 -> 英文；未设置时随默认中文
+    self.lang = "zh"
 
     self.update_params()
 
@@ -250,18 +250,21 @@ class CarrotServ:
     self.autoRoadSpeedLimitOffset = get_int_param(self.params, "AutoRoadSpeedLimitOffset", -1)
 
     # 读取语言设置：优先使用 LanguageSetting，与 UI 保持一致；回退读取可能存在的 "lang"
+    # UI 现在写入裸代码（如 zh-CHS），兼容旧版带 main_ 前缀的值（main_zh-CHS / main_ko / main_en）
     try:
       lang_val = self.params.get('LanguageSetting') or self.params.get('lang')
     except Exception:
       lang_val = None
     if isinstance(lang_val, bytes):
       try:
-        lang_val = lang_val
+        lang_val = lang_val.decode('utf-8', 'ignore')
       except Exception:
         lang_val = None
-    if lang_val == "main_ko":
+    # 未设置（刷机后默认状态）时随系统默认中文
+    lang_val = str(lang_val or 'zh-CHS').removeprefix('main_')
+    if lang_val == "ko":
       self.lang = "ko"
-    elif lang_val == "main_zh-CHS":
+    elif lang_val in ("zh-CHS", "zh"):
       self.lang = "zh"
     else:
       self.lang = "en"
