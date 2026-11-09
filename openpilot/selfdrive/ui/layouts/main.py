@@ -1,6 +1,7 @@
 import pyray as rl
 from enum import IntEnum
 import openpilot.cereal.messaging as messaging
+from openpilot.common.swaglog import cloudlog
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.widgets import Widget
 from openpilot.selfdrive.ui.layouts.sidebar import Sidebar, SIDEBAR_WIDTH
@@ -53,6 +54,41 @@ class MainLayout(Widget):
     self._onboarding_window = OnboardingWindow()
     if not self._onboarding_window.completed:
       gui_app.push_widget(self._onboarding_window)
+
+    # Warm the settings screen caches before the first frame is presented so
+    # the first tap on the settings button doesn't freeze the UI for 1-2 s.
+    self._prewarm_settings()
+
+  def _prewarm_settings(self) -> None:
+    """Render the settings layout once, offscreen, at startup.
+
+    The first on-screen open of the settings page pays a pile of one-time
+    costs on the render thread: baking the CJK fallback font (load_font_ex of
+    ~2000 codepoints + mipmap generation), loading the ~14 nav icon textures
+    from disk, first-time text measurements (measure_text_cached), and the
+    first params reads. Together that stalls the UI for 1-2 s right after
+    tapping the settings button (measured with py-spy: the first settings
+    frame took ~1.6 s, ~0.25 s of it inside gui_app.fallback_font's bake).
+    Running one hidden render here moves that hitch into the boot phase,
+    before the first frame is presented.
+    """
+    settings = self._layouts[MainState.SETTINGS]
+    render_w, render_h = rl.get_render_width(), rl.get_render_height()
+    if render_w <= 0 or render_h <= 0:
+      return
+    try:
+      texture = rl.load_render_texture(render_w, render_h)
+    except Exception:
+      cloudlog.exception("settings prewarm: failed to load render texture")
+      return
+    try:
+      rl.begin_texture_mode(texture)
+      try:
+        settings.render(rl.Rectangle(0, 0, gui_app.width, gui_app.height))
+      finally:
+        rl.end_texture_mode()
+    finally:
+      rl.unload_render_texture(texture)
 
   def _render(self, _):
     self._handle_onroad_transition()
