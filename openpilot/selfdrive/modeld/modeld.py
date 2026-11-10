@@ -37,6 +37,7 @@ from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
 from openpilot.common.transformations.model import get_warp_matrix
 from openpilot.selfdrive.controls.lib.desire_helper import get_desire_helper
 from openpilot.selfdrive.carrot.carrot_cruise import CarrotCruise
+from openpilot.selfdrive.carrot.navi_lane_change_gate import NaviLaneChangeGate
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, should_stop, smooth_value, get_curvature_from_plan
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
 from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_driving_model_data, fill_pose_msg, PublishState
@@ -309,7 +310,7 @@ def main(demo=False):
   pub_socks = ["modelV2", "drivingModelData", "cameraOdometry", "modelDataV2SP"] + (["chestnutGpuState"] if CHESTNUT else [])
   pm = PubMaster(pub_socks)
   sm = SubMaster(["deviceState", "carState", "narrowRoadCameraState", "extrinsicsCalibration", "driverMonitoringState",
-                  "carControl", "controlsState", "lateralDelay", "carrotMan"])
+                  "carControl", "controlsState", "lateralDelay", "carrotMan", "carrotNavi"])
 
   publish_state = PublishState()
   params = Params()
@@ -341,6 +342,8 @@ def main(demo=False):
 
   DH = get_desire_helper(CP.brand)
   carrot_cruise = CarrotCruise()
+  # 拨杆变道的导航许可闸门（carrotNavi → DH.navi_lc_allowed，fail-open）
+  navi_gate = NaviLaneChangeGate()
   RELC = RoadEdgeLaneChangeController()
 
   while True:
@@ -465,6 +468,8 @@ def main(demo=False):
       # carrot ATC：转弯减速区间内冻结变道发起（activeCarrot>1 ∧ 0<xDistToTurn<100）
       carrot_cruise.update(sm)
       DH.carrot_atc_active = carrot_cruise.atc_active
+      # 导航变道许可闸门：临近转向/匝道/路口或单车道时抑制拨杆变道发起
+      DH.navi_lc_allowed = navi_gate.update(sm)
       DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob, left_edge, right_edge)
       modelv2_send.modelV2.meta.laneChangeState = DH.lane_change_state
       modelv2_send.modelV2.meta.laneChangeDirection = DH.lane_change_direction

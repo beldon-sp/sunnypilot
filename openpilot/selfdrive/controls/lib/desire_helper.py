@@ -40,6 +40,10 @@ class DesireHelper:
     # carrot ATC 转弯区间（activeCarrot>1 ∧ 0<xDistToTurn<100）：冻结变道发起，
     # 由 modeld 每帧从 carrotMan 喂入（见 carrot_cruise.CarrotCruise.atc_active）
     self.carrot_atc_active = False
+    # 导航变道许可闸门（拨杆触发的导航引导变道）：由 modeld 每帧从
+    # navi_lane_change_gate.NaviLaneChangeGate 喂入；fail-open——闸门未启用或
+    # carrotmate 掉线时恒为 True，行为与纯拨杆 ALC 完全一致
+    self.navi_lc_allowed = True
 
   # ── brand adaptation hooks - stock defaults are behavior-neutral no-ops;
   #    desire_helper_byd.BydDesireHelper overrides them with the vendor port ──
@@ -114,7 +118,7 @@ class DesireHelper:
         # brand clear-window gate (stock _clear_window_ok() is always True;
         # BYD requires fresh rear-traffic clearance before any start path)
         elif (torque_applied or self.alc.auto_lane_change_allowed) and not self.alc.lane_change_blocked \
-          and not self.carrot_atc_active and self._clear_window_ok():
+          and not self.carrot_atc_active and self.navi_lc_allowed and self._clear_window_ok():
           self.lane_change_state = LaneChangeState.laneChangeStarting
           self.lane_change_timer = 0.0
           self.lane_change_clear_time = 0.0

@@ -157,6 +157,9 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"ApiCache_DriveStats", {PERSISTENT, JSON}},
     {"AutoLaneChangeBsmDelay", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"AutoLaneChangeTimer", {PERSISTENT | BACKUP, INT, "0"}},
+    {"NaviGuidedLaneChangeEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},  // 拨杆变道的导航许可闸门（carrotmate，fail-open）
+    {"NaviLaneChangeTurnDistance", {PERSISTENT | BACKUP, INT, "300"}},  // meters, 临近转向/匝道抑制距离
+    {"NaviLaneChangeCrossroadDistance", {PERSISTENT | BACKUP, INT, "150"}},  // meters, 临近路口抑制距离
     {"BlinkerLateralReengageDelay", {PERSISTENT | BACKUP, INT, "0"}},  // seconds
     {"BlinkerMinLateralControlSpeed", {PERSISTENT | BACKUP, INT, "20"}},  // MPH or km/h
     {"BlinkerPauseLateralControl", {PERSISTENT | BACKUP, INT, "0"}},

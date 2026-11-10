@@ -61,6 +61,7 @@ def sp_stats(end_event):
     'RainbowMode',
     'ShowAdvancedControls',
     'Mads',
+    'NaviGuidedLaneChangeEnabled',
     'MadsMainCruiseAllowed',
     'MadsSteeringMode',
     'MadsUnifiedEngagementMode',

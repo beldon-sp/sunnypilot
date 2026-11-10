@@ -52,6 +52,11 @@ class LaneChangeSettingsLayout(Widget):
       description=lambda: tr("Toggle to enable a delay timer for seamless lane changes when blind spot monitoring " +
                              "(BSM) detects a obstructing vehicle, ensuring safe maneuvering."),
     )
+    self._navi_gate = toggle_item_sp(
+      param="NaviGuidedLaneChangeEnabled",
+      title=lambda: tr("Navi-Guided Lane Change"),
+      description=lambda: tr("Gate blinker lane changes with carrotmate navigation guidance near turns, ramps, and crossroads."),
+    )
     self._road_edge_block = toggle_item_sp(
       param="RoadEdgeLaneChangeEnabled",
       title=lambda: tr("Block Lane Change: Road Edge Detection"),
@@ -62,6 +67,8 @@ class LaneChangeSettingsLayout(Widget):
       self._lane_change_timer,
       LineSeparatorSP(40),
       self._bsm_delay,
+      LineSeparatorSP(40),
+      self._navi_gate,
       LineSeparatorSP(40),
       self._road_edge_block,
     ]

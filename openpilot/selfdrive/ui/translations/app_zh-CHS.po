@@ -1665,6 +1665,10 @@ msgstr "无"
 msgid "NO"
 msgstr "无"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
+msgid "Navi-Guided Lane Change"
+msgstr "导航引导变道"
+
 #: openpilot/selfdrive/ui/sunnypilot/onroad/speed_limit.py
 msgid "Near"
 msgstr "附近"
@@ -2762,6 +2766,10 @@ msgstr "请开关一次原厂 LKAS 后启用"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
 msgid "Toggle to enable a delay timer for seamless lane changes when blind spot monitoring (BSM) detects a obstructing vehicle, ensuring safe maneuvering."
 msgstr "当盲点监测 (BSM) 检测到障碍车辆时启用延迟计时器，以确保安全变道。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
+msgid "Gate blinker lane changes with carrotmate navigation guidance near turns, ramps, and crossroads."
+msgstr "拨杆变道结合 carrotmate 导航先验进行许可判断：临近转向、匝道与路口时抑制变道发起；导航不可用时自动退回普通行为。"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
 msgid "Toggle visibility of advanced sunnypilot controls.<br>This only changes the visibility of the toggles; it does not change the actual enabled/disabled state."
