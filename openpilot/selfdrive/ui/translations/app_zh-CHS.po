@@ -3616,3 +3616,103 @@ msgstr "已用 {}%"
 msgid "✓ SUBSCRIBED"
 msgstr "已订阅"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Vehicle & version"
+msgstr "车辆与版本"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Lane change quick settings"
+msgstr "变道快捷设置"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Car model"
+msgstr "适配车型"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Version"
+msgstr "版本"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Branch / commit"
+msgstr "分支 / 提交"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "BSM support"
+msgstr "盲点监测"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Blind spot"
+msgstr "盲点状态"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Temperature"
+msgstr "温度"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Vehicle connection"
+msgstr "车辆连接"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Supported"
+msgstr "已支持"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Not available"
+msgstr "不可用"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Detected"
+msgstr "检测到来车"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Clear"
+msgstr "无来车"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Normal"
+msgstr "正常"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "High"
+msgstr "偏高"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Connected"
+msgstr "已连接"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Not connected"
+msgstr "未连接"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Offline"
+msgstr "离线"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Auto lane change"
+msgstr "自动变道"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "BSM delay"
+msgstr "BSM 延迟阻断"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Low-speed lane change"
+msgstr "低速转向变道"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "More lane change settings"
+msgstr "更多变道设置"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "On"
+msgstr "开"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Tap to change, takes effect in ~1s"
+msgstr "点击切换，约 1 秒后生效"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "BSM delay needs a timed lane change mode"
+msgstr "BSM 延迟需延迟变道模式"
+

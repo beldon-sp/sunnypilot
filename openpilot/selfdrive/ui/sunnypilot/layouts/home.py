@@ -6,6 +6,7 @@ See the LICENSE.md file in the root directory for more details.
 """
 import pyray as rl
 from openpilot.selfdrive.ui.layouts.home import HomeLayout, HomeLayoutState, HEAD_BUTTON_FONT_SIZE, SPACING
+from openpilot.selfdrive.ui.sunnypilot.layouts.home_cards import LaneChangeQuickSettingsWidget, VehicleStatusWidget
 from openpilot.system.ui.lib.application import gui_app, FontWeight, TextAlignment
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.lib.multilang import tr, trn
@@ -16,6 +17,12 @@ BRAND_DESC_SPACING = 12
 
 
 class HomeLayoutSP(HomeLayout):
+  def __init__(self):
+    super().__init__()
+    # Replace the upstream comma prime ad and connect pairing prompt with car-specific panels
+    self._prime_widget = VehicleStatusWidget()
+    self._setup_widget = LaneChangeQuickSettingsWidget()
+
   def _render_header(self):
     font = gui_app.font(FontWeight.MEDIUM)
 
