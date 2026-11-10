@@ -26,7 +26,6 @@ MUTED_COLOR = style.ITEM_TEXT_VALUE_COLOR
 TEXT_COLOR = style.ITEM_TEXT_COLOR
 
 TITLE_FONT_SIZE = style.ITEM_TEXT_FONT_SIZE + 10  # 60
-BUTTON_FONT_SIZE = style.ITEM_TEXT_FONT_SIZE + 2  # 52
 ROW_FONT_SIZE = style.ITEM_TEXT_FONT_SIZE - 6  # 44
 HINT_FONT_SIZE = style.ITEM_DESC_FONT_SIZE - 6  # 34
 
@@ -34,6 +33,7 @@ CARD_PADDING_X = 56
 CARD_PADDING_Y = 48
 TITLE_GAP = 92
 MAX_ROW_HEIGHT = 72
+REFRESH_INTERVAL = 2.0
 
 TIMER_LABELS = {
   AutoLaneChangeMode.OFF: lambda: tr("Off"),
@@ -44,8 +44,6 @@ TIMER_LABELS = {
   AutoLaneChangeMode.TWO_SECONDS: lambda: f"2 {tr('s')}",
   AutoLaneChangeMode.THREE_SECONDS: lambda: f"3 {tr('s')}",
 }
-
-TIMER_VALUES = list(TIMER_LABELS.keys())
 
 
 class VehicleStatusWidget(Widget):
@@ -125,7 +123,7 @@ class VehicleStatusWidget(Widget):
     return tr("Paired") if ui_state.sunnylink_state.is_paired() else tr("Unpaired")
 
   def _update_state(self):
-    if time.monotonic() - self._last_refresh > 2.0:
+    if time.monotonic() - self._last_refresh > REFRESH_INTERVAL:
       self._refresh_rows()
 
   def _render(self, rect: rl.Rectangle):
@@ -152,80 +150,61 @@ class VehicleStatusWidget(Widget):
       y += row_height
 
 
-class LaneChangeQuickSettingsWidget(Widget):
-  """Home right column: one-tap lane change params. Replaces the comma connect pairing prompt."""
+class LaneChangeStatusWidget(Widget):
+  """Home right column: read-only lane change snapshot plus settings shortcuts.
+
+  Deliberately does not write Params: these are safety-relevant lane change settings,
+  so changing them from a one-tap home widget (no confirmation, no undo) is risky.
+  Edits happen in the settings panels the two buttons open.
+  """
 
   def __init__(self):
     super().__init__()
     self._open_settings_callback = None
     self._last_refresh = 0.0
-
+    self._rows: list[tuple[str, str]] = []
     self._timer_value = AutoLaneChangeMode.NUDGE
-    self._bsm_delay = False
-    self._lane_turn = False
-    self._bsm_supported = False
 
-    self._timer_text = ""
-    self._bsm_text = ""
-    self._lane_turn_text = ""
+    self._steering_btn = Button(lambda: tr("Open steering settings"),
+                                lambda: self._open_panel("STEERING"),
+                                font_size=ROW_FONT_SIZE, button_style=ButtonStyle.PRIMARY)
+    self._visuals_btn = Button(lambda: tr("Open visuals settings"),
+                               lambda: self._open_panel("VISUALS"),
+                               font_size=ROW_FONT_SIZE)
 
-    self._timer_btn = Button(lambda: self._timer_text, self._cycle_timer, font_size=BUTTON_FONT_SIZE)
-    self._bsm_btn = Button(lambda: self._bsm_text, self._toggle_bsm_delay, font_size=ROW_FONT_SIZE + 4)
-    self._lane_turn_btn = Button(lambda: self._lane_turn_text, self._toggle_lane_turn, font_size=ROW_FONT_SIZE + 4)
-    self._more_btn = Button(lambda: tr("More lane change settings"), self._open_lane_change_settings,
-                            font_size=ROW_FONT_SIZE, button_style=ButtonStyle.PRIMARY)
-
-    self._refresh_values()
+    self._refresh_rows()
 
   # Keep the upstream MainLayout callback contract (layouts/main.py sets this).
   def set_open_settings_callback(self, callback):
     self._open_settings_callback = callback
 
-  def _refresh_values(self):
+  def _refresh_rows(self):
     params = ui_state.params
     self._timer_value = int(params.get("AutoLaneChangeTimer", return_default=True) or AutoLaneChangeMode.NUDGE)
-    self._bsm_delay = params.get_bool("AutoLaneChangeBsmDelay")
-    self._lane_turn = params.get_bool("LaneTurnDesire")
-    self._bsm_supported = ui_state.CP is not None and has_bsm(ui_state.CP, ui_state.CP_SP)
-
-    timer_label = TIMER_LABELS.get(self._timer_value, TIMER_LABELS[AutoLaneChangeMode.NUDGE])()
     on, off = tr("On"), tr("Off")
+    bsm_supported = ui_state.CP is not None and has_bsm(ui_state.CP, ui_state.CP_SP)
 
-    self._timer_text = f"{tr('Auto lane change')}    {timer_label}"
-    self._bsm_text = (f"{tr('BSM delay')}    {on if self._bsm_delay else off}" if self._bsm_supported
-                      else f"{tr('BSM delay')}    {tr('Not available')}")
-    self._lane_turn_text = f"{tr('Low-speed lane change')}    {on if self._lane_turn else off}"
-    self._bsm_btn.set_enabled(self._bsm_supported)
+    mode = TIMER_LABELS.get(self._timer_value, TIMER_LABELS[AutoLaneChangeMode.NUDGE])()
+    bsm_delay = (on if params.get_bool("AutoLaneChangeBsmDelay") else off) if bsm_supported else tr("Not available")
+
+    self._rows = [
+      (tr("Auto lane change"), mode),
+      (tr("BSM delay"), bsm_delay),
+      (tr("Road edge block"), on if params.get_bool("RoadEdgeLaneChangeEnabled") else off),
+      (tr("Low-speed lane change"), on if params.get_bool("LaneTurnDesire") else off),
+    ]
     self._last_refresh = time.monotonic()
 
   def _update_state(self):
-    if time.monotonic() - self._last_refresh > 1.0:
-      self._refresh_values()
+    if time.monotonic() - self._last_refresh > REFRESH_INTERVAL:
+      self._refresh_rows()
 
-  def _cycle_timer(self):
-    try:
-      idx = TIMER_VALUES.index(self._timer_value)
-    except ValueError:
-      idx = TIMER_VALUES.index(AutoLaneChangeMode.NUDGE)
-    ui_state.params.put("AutoLaneChangeTimer", TIMER_VALUES[(idx + 1) % len(TIMER_VALUES)])
-    self._refresh_values()
-
-  def _toggle_bsm_delay(self):
-    if not self._bsm_supported:
-      return
-    ui_state.params.put_bool("AutoLaneChangeBsmDelay", not self._bsm_delay)
-    self._refresh_values()
-
-  def _toggle_lane_turn(self):
-    ui_state.params.put_bool("LaneTurnDesire", not self._lane_turn)
-    self._refresh_values()
-
-  def _open_lane_change_settings(self):
+  def _open_panel(self, panel_name: str):
     if self._open_settings_callback is None:
       return
-    # Imported lazily: sunnypilot extends OP.PanelType (adds STEERING) when this module loads.
+    # Imported lazily: sunnypilot extends OP.PanelType (adds STEERING/VISUALS) on import.
     from openpilot.selfdrive.ui.sunnypilot.layouts.settings import settings as sp_settings
-    panel_type = getattr(sp_settings.OP.PanelType, "STEERING", sp_settings.OP.PanelType.DEVICE)
+    panel_type = getattr(sp_settings.OP.PanelType, panel_name, sp_settings.OP.PanelType.DEVICE)
     self._open_settings_callback(panel_type)
 
   def _render(self, rect: rl.Rectangle):
@@ -235,21 +214,26 @@ class LaneChangeQuickSettingsWidget(Widget):
     w = rect.width - 2 * CARD_PADDING_X
     y = rect.y + CARD_PADDING_Y
 
-    gui_label(rl.Rectangle(x, y, w, TITLE_FONT_SIZE + 16), tr("Lane change quick settings"),
+    gui_label(rl.Rectangle(x, y, w, TITLE_FONT_SIZE + 16), tr("Lane change status"),
               TITLE_FONT_SIZE, TEXT_COLOR, font_weight=FontWeight.BOLD)
     y += 82
 
-    gui_label(rl.Rectangle(x, y, w, 52), tr("Tap to change, takes effect in ~1s"), HINT_FONT_SIZE, MUTED_COLOR)
+    gui_label(rl.Rectangle(x, y, w, 52), tr("Read-only snapshot, change in settings"),
+              HINT_FONT_SIZE, MUTED_COLOR)
     y += 70
 
-    button_height = 132
-    for button in (self._timer_btn, self._bsm_btn, self._lane_turn_btn):
-      button.render(rl.Rectangle(x, y, w, button_height))
-      y += button_height + 26
+    row_height = 64
+    for label, value in self._rows:
+      gui_label(rl.Rectangle(x, y, w * 0.46, row_height), label, ROW_FONT_SIZE, MUTED_COLOR)
+      gui_label(rl.Rectangle(x + w * 0.46, y, w * 0.54, row_height), value, ROW_FONT_SIZE, TEXT_COLOR,
+                font_weight=FontWeight.MEDIUM, alignment=TextAlignment.RIGHT)
+      y += row_height
 
-    y += 12
-    self._more_btn.render(rl.Rectangle(x, y, w, 100))
-    y += 124
+    y += 28
+    self._steering_btn.render(rl.Rectangle(x, y, w, 110))
+    y += 134
+    self._visuals_btn.render(rl.Rectangle(x, y, w, 110))
+    y += 140
 
     if self._timer_value <= AutoLaneChangeMode.NUDGE:
       gui_label(rl.Rectangle(x, y, w, 48), tr("BSM delay needs a timed lane change mode"),

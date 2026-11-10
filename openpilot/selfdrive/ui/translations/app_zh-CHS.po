@@ -3756,3 +3756,23 @@ msgstr "有可用更新"
 msgid "Tap to view"
 msgstr "点击查看"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Lane change status"
+msgstr "变道状态"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Read-only snapshot, change in settings"
+msgstr "只读快照，修改请进入设置"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Road edge block"
+msgstr "路沿阻断变道"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Open steering settings"
+msgstr "转向与变道设置"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Open visuals settings"
+msgstr "盲点与显示设置"
+

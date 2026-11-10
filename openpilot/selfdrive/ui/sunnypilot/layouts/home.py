@@ -8,7 +8,7 @@ import time
 
 import pyray as rl
 from openpilot.selfdrive.ui.layouts.home import HomeLayout, HomeLayoutState, HEAD_BUTTON_FONT_SIZE, SPACING, REFRESH_INTERVAL
-from openpilot.selfdrive.ui.sunnypilot.layouts.home_cards import LaneChangeQuickSettingsWidget, VehicleStatusWidget
+from openpilot.selfdrive.ui.sunnypilot.layouts.home_cards import LaneChangeStatusWidget, VehicleStatusWidget
 from openpilot.selfdrive.ui.widgets.offroad_alerts import AlertColors
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, TextAlignment
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -33,7 +33,7 @@ class HomeLayoutSP(HomeLayout):
     super().__init__()
     # Replace the upstream comma prime ad and connect pairing prompt with car-specific panels
     self._prime_widget = VehicleStatusWidget()
-    self._setup_widget = LaneChangeQuickSettingsWidget()
+    self._setup_widget = LaneChangeStatusWidget()
     self._banner_rect = rl.Rectangle(0, 0, 0, 0)
 
   def _render(self, rect: rl.Rectangle):
