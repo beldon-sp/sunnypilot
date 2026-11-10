@@ -10,32 +10,30 @@ import time
 import pyray as rl
 
 from opendbc.sunnypilot.car.interfaces import has_bsm
-from openpilot.cereal import log
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AutoLaneChangeMode
 from openpilot.system.ui.lib.application import FontWeight, TextAlignment
 from openpilot.system.ui.lib.multilang import tr
+from openpilot.system.ui.sunnypilot.lib.styles import style
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.button import Button, ButtonStyle
 from openpilot.system.ui.widgets.label import gui_label
 
-BG_COLOR = rl.Color(51, 51, 51, 255)
-MUTED_COLOR = rl.Color(160, 160, 160, 255)
-TEXT_COLOR = rl.WHITE
+# Colors come from the shared sunnypilot palette; card font sizes are derived from
+# the same base sizes, scaled down for the denser two-column home layout.
+BG_COLOR = style.BUTTON_NEUTRAL_GRAY
+MUTED_COLOR = style.ITEM_TEXT_VALUE_COLOR
+TEXT_COLOR = style.ITEM_TEXT_COLOR
 
-NetworkType = log.DeviceState.NetworkType
-ThermalStatus = log.DeviceState.ThermalStatus
-PandaType = log.PandaState.PandaType
+TITLE_FONT_SIZE = style.ITEM_TEXT_FONT_SIZE + 10  # 60
+BUTTON_FONT_SIZE = style.ITEM_TEXT_FONT_SIZE + 2  # 52
+ROW_FONT_SIZE = style.ITEM_TEXT_FONT_SIZE - 6  # 44
+HINT_FONT_SIZE = style.ITEM_DESC_FONT_SIZE - 6  # 34
 
-NETWORK_NAMES = {
-  NetworkType.none: "Offline",
-  NetworkType.wifi: "WiFi",
-  NetworkType.cell2G: "2G",
-  NetworkType.cell3G: "3G",
-  NetworkType.cell4G: "LTE",
-  NetworkType.cell5G: "5G",
-  NetworkType.ethernet: "Ethernet",
-}
+CARD_PADDING_X = 56
+CARD_PADDING_Y = 48
+TITLE_GAP = 92
+MAX_ROW_HEIGHT = 72
 
 TIMER_LABELS = {
   AutoLaneChangeMode.OFF: lambda: tr("Off"),
@@ -51,7 +49,11 @@ TIMER_VALUES = list(TIMER_LABELS.keys())
 
 
 class VehicleStatusWidget(Widget):
-  """Home left column: vehicle, version and device status. Replaces the comma prime ad."""
+  """Home left column: vehicle, version and car-specific status. Replaces the comma prime ad.
+
+  Deliberately omits network / temperature / panda / sunnylink connectivity, which the
+  sidebar already shows. Everything here is either car-specific or absent from the sidebar.
+  """
 
   def __init__(self):
     super().__init__()
@@ -78,21 +80,22 @@ class VehicleStatusWidget(Widget):
     bsm_supported = cp is not None and has_bsm(cp, ui_state.CP_SP)
 
     ds = sm["deviceState"]
-    network = tr(NETWORK_NAMES.get(ds.networkType.raw, "Unknown"))
-    temperature = tr("Normal") if ds.thermalStatus == ThermalStatus.ok else tr("High")
-    panda = tr("Not connected") if ui_state.panda_type == PandaType.unknown else tr("Connected")
+    # carState alive/valid is the UI-level proxy for the CAN feed that carries BSD_RADAR.
+    bsd_online = sm.alive["carState"] and sm.valid["carState"]
+    bsd_status = (f"{tr('Supported')} · {tr('Online') if bsd_online else tr('No data')}"
+                  if bsm_supported else tr("Not available"))
 
-    blindspot = self._blindspot_text()
+    storage = f"{ds.freeSpacePercent:.0f} %" if ds.freeSpacePercent else "—"
 
     self._rows = [
       (tr("Car model"), vehicle),
       (tr("Version"), f"{version}  ·  {build_date}"),
       (tr("Branch / commit"), f"{branch}  ·  {commit}"),
-      (tr("BSM support"), tr("Supported") + " (BSD_RADAR)" if bsm_supported else tr("Not available")),
-      (tr("Blind spot"), blindspot),
-      (tr("Network"), network),
-      (tr("Temperature"), temperature),
-      (tr("Vehicle connection"), panda),
+      (tr("BSD radar"), bsd_status),
+      (tr("Blind spot"), self._blindspot_text()),
+      (tr("Model"), self._model_text()),
+      (tr("Sunnylink"), self._sunnylink_text()),
+      (tr("Storage"), storage),
     ]
     self._last_refresh = time.monotonic()
 
@@ -105,6 +108,22 @@ class VehicleStatusWidget(Widget):
     sides = [side for side, detected in (("L", cs.leftBlindspot), ("R", cs.rightBlindspot)) if detected]
     return f"{'+'.join(sides)}  {tr('Detected')}" if sides else tr("Clear")
 
+  @staticmethod
+  def _model_text() -> str:
+    bundle = getattr(ui_state, "active_bundle", None)
+    if isinstance(bundle, dict):
+      name = bundle.get("displayName") or bundle.get("internalName")
+      if name:
+        return str(name)
+    return tr("Default")
+
+  @staticmethod
+  def _sunnylink_text() -> str:
+    # Show pairing state, not connectivity: the sidebar already shows ONLINE/OFFLINE.
+    if not ui_state.sunnylink_enabled:
+      return tr("Disabled")
+    return tr("Paired") if ui_state.sunnylink_state.is_paired() else tr("Unpaired")
+
   def _update_state(self):
     if time.monotonic() - self._last_refresh > 2.0:
       self._refresh_rows()
@@ -112,18 +131,25 @@ class VehicleStatusWidget(Widget):
   def _render(self, rect: rl.Rectangle):
     rl.draw_rectangle_rounded(rect, 0.025, 10, BG_COLOR)
 
-    x = rect.x + 64
-    w = rect.width - 128
-    y = rect.y + 56
+    x = rect.x + CARD_PADDING_X
+    w = rect.width - 2 * CARD_PADDING_X
+    y = rect.y + CARD_PADDING_Y
 
-    gui_label(rl.Rectangle(x, y, w, 90), tr("Vehicle & version"), 72, TEXT_COLOR, font_weight=FontWeight.BOLD)
-    y += 118
+    gui_label(rl.Rectangle(x, y, w, TITLE_FONT_SIZE + 20), tr("Vehicle & version"),
+              TITLE_FONT_SIZE, TEXT_COLOR, font_weight=FontWeight.BOLD)
+    y += TITLE_GAP
+
+    # The home layout can shrink this card when the alert banner is visible.
+    # Scale row height and font to the remaining space so nothing overflows.
+    available = max(rect.y + rect.height - CARD_PADDING_Y - y, 0)
+    row_height = min(MAX_ROW_HEIGHT, available / len(self._rows)) if self._rows else MAX_ROW_HEIGHT
+    row_font_size = min(ROW_FONT_SIZE, max(24, int(row_height * 0.62)))
 
     for label, value in self._rows:
-      gui_label(rl.Rectangle(x, y, w * 0.34, 60), label, 44, MUTED_COLOR)
-      gui_label(rl.Rectangle(x + w * 0.34, y, w * 0.66, 60), value, 44, TEXT_COLOR,
+      gui_label(rl.Rectangle(x, y, w * 0.34, row_height), label, row_font_size, MUTED_COLOR)
+      gui_label(rl.Rectangle(x + w * 0.34, y, w * 0.66, row_height), value, row_font_size, TEXT_COLOR,
                 font_weight=FontWeight.MEDIUM, alignment=TextAlignment.RIGHT)
-      y += 72
+      y += row_height
 
 
 class LaneChangeQuickSettingsWidget(Widget):
@@ -143,11 +169,11 @@ class LaneChangeQuickSettingsWidget(Widget):
     self._bsm_text = ""
     self._lane_turn_text = ""
 
-    self._timer_btn = Button(lambda: self._timer_text, self._cycle_timer, font_size=52)
-    self._bsm_btn = Button(lambda: self._bsm_text, self._toggle_bsm_delay, font_size=48)
-    self._lane_turn_btn = Button(lambda: self._lane_turn_text, self._toggle_lane_turn, font_size=48)
+    self._timer_btn = Button(lambda: self._timer_text, self._cycle_timer, font_size=BUTTON_FONT_SIZE)
+    self._bsm_btn = Button(lambda: self._bsm_text, self._toggle_bsm_delay, font_size=ROW_FONT_SIZE + 4)
+    self._lane_turn_btn = Button(lambda: self._lane_turn_text, self._toggle_lane_turn, font_size=ROW_FONT_SIZE + 4)
     self._more_btn = Button(lambda: tr("More lane change settings"), self._open_lane_change_settings,
-                            font_size=44, button_style=ButtonStyle.PRIMARY)
+                            font_size=ROW_FONT_SIZE, button_style=ButtonStyle.PRIMARY)
 
     self._refresh_values()
 
@@ -205,14 +231,15 @@ class LaneChangeQuickSettingsWidget(Widget):
   def _render(self, rect: rl.Rectangle):
     rl.draw_rectangle_rounded(rect, 0.03, 20, BG_COLOR)
 
-    x = rect.x + 56
-    w = rect.width - 112
-    y = rect.y + 48
+    x = rect.x + CARD_PADDING_X
+    w = rect.width - 2 * CARD_PADDING_X
+    y = rect.y + CARD_PADDING_Y
 
-    gui_label(rl.Rectangle(x, y, w, 76), tr("Lane change quick settings"), 60, TEXT_COLOR, font_weight=FontWeight.BOLD)
+    gui_label(rl.Rectangle(x, y, w, TITLE_FONT_SIZE + 16), tr("Lane change quick settings"),
+              TITLE_FONT_SIZE, TEXT_COLOR, font_weight=FontWeight.BOLD)
     y += 82
 
-    gui_label(rl.Rectangle(x, y, w, 52), tr("Tap to change, takes effect in ~1s"), 34, MUTED_COLOR)
+    gui_label(rl.Rectangle(x, y, w, 52), tr("Tap to change, takes effect in ~1s"), HINT_FONT_SIZE, MUTED_COLOR)
     y += 70
 
     button_height = 132
@@ -225,4 +252,5 @@ class LaneChangeQuickSettingsWidget(Widget):
     y += 124
 
     if self._timer_value <= AutoLaneChangeMode.NUDGE:
-      gui_label(rl.Rectangle(x, y, w, 48), tr("BSM delay needs a timed lane change mode"), 32, MUTED_COLOR)
+      gui_label(rl.Rectangle(x, y, w, 48), tr("BSM delay needs a timed lane change mode"),
+                HINT_FONT_SIZE, MUTED_COLOR)

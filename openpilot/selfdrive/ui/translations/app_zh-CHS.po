@@ -3716,3 +3716,43 @@ msgstr "点击切换，约 1 秒后生效"
 msgid "BSM delay needs a timed lane change mode"
 msgstr "BSM 延迟需延迟变道模式"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "BSD radar"
+msgstr "BSD 雷达"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Online"
+msgstr "在线"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "No data"
+msgstr "无数据"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Model"
+msgstr "模型"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Storage"
+msgstr "存储"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Sunnylink"
+msgstr "Sunnylink"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Unpaired"
+msgstr "未配对"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Disabled"
+msgstr "未启用"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home.py
+msgid "Update available"
+msgstr "有可用更新"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home.py
+msgid "Tap to view"
+msgstr "点击查看"
+
