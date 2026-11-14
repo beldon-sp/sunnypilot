@@ -4,8 +4,12 @@
 - 直角弯 → 弯道点速度 sqrt(a_lat/κ) 且受下限约束
 - sequence 缓存：同 sequence 不重算；新 sequence 重算
 - route 流无效 → 预览失效（SCC-M 回落 OSM，fail-open）
+- v6 mate /route_geometry 高分辨率几何：mtime 新鲜度、坏文件 fail-open、
+  update_geometry 仲裁（几何 > polyline）
 """
+import json
 import math
+import os
 import time
 from types import SimpleNamespace
 
@@ -14,6 +18,8 @@ import pytest
 from openpilot.selfdrive.carrot.route_curvature import TO_RADIANS
 
 from openpilot.selfdrive.carrot.route_curvature import (
+  MateGeometrySource,
+  MATE_GEOMETRY_TIMEOUT,
   RouteCurvaturePreview,
   _menger_curvature,
   distance_to_point,
@@ -120,6 +126,108 @@ class TestPreview:
     preview.mark_stale()
     assert preview.valid is False
     assert preview.age() == float('inf')
+
+
+class TestMateGeometrySource:
+  """v6 mate /route_geometry 落盘文件的读取源（文件 IPC）。"""
+
+  def _write(self, path, points, sequence=11, age_s=0.0):
+    payload = {"ts": 0.0, "sequence": sequence, "points": [{"latitude": la, "longitude": lo} for la, lo in points]}
+    with open(path, "w", encoding="utf-8") as f:
+      json.dump(payload, f)
+    if age_s:
+      old = time.time() - age_s
+      os.utime(path, (old, old))
+
+  def test_read_valid(self, tmp_path):
+    path = str(tmp_path / "geo.json")
+    self._write(path, CORNER, sequence=42)
+    src = MateGeometrySource(path)
+    points = src.read()
+    assert points is not None and len(points) == len(CORNER)
+    assert src.sequence() == 42
+
+  def test_read_cached_until_mtime_changes(self, tmp_path):
+    path = str(tmp_path / "geo.json")
+    self._write(path, CORNER)
+    src = MateGeometrySource(path)
+    first = src.read()
+    assert src.read() is first  # mtime 未变：缓存命中，不重读盘
+
+  def test_bad_file_fail_open(self, tmp_path):
+    for content in ("not json", '{"sequence": 1, "points": [{"latitude": 1.0}]}', '{"points": []}'):
+      path = str(tmp_path / "geo.json")
+      with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+      src = MateGeometrySource(path)
+      assert src.read() is None
+
+  def test_out_of_range_rejected(self, tmp_path):
+    path = str(tmp_path / "geo.json")
+    self._write(path, [(95.0, 116.0), (95.1, 116.1), (95.2, 116.2)])
+    src = MateGeometrySource(path)
+    assert src.read() is None
+
+  def test_missing_file(self, tmp_path):
+    src = MateGeometrySource(str(tmp_path / "nope.json"))
+    assert src.read() is None
+    assert src.fresh() is False
+
+  def test_freshness_window(self, tmp_path):
+    path = str(tmp_path / "geo.json")
+    self._write(path, CORNER)
+    src = MateGeometrySource(path)
+    src.read()
+    assert src.fresh() is True
+    self._write(path, CORNER, age_s=MATE_GEOMETRY_TIMEOUT + 5)
+    assert src.fresh() is False
+
+
+class TestUpdateGeometry:
+  """RouteCurvaturePreview.update_geometry：mate 几何优先、fail-open 回落。"""
+
+  def test_geometry_drives_recompute(self, tmp_path):
+    path = str(tmp_path / "geo.json")
+    payload = {"ts": 0.0, "sequence": 5, "points": [{"latitude": la, "longitude": lo} for la, lo in CORNER]}
+    with open(path, "w", encoding="utf-8") as f:
+      json.dump(payload, f)
+    preview = RouteCurvaturePreview(mate_source=MateGeometrySource(path))
+    assert preview.update_geometry() is True
+    assert preview.valid is False  # polyline 侧独立，未被几何污染
+    assert len(preview.target_velocities) > 0
+
+  def test_geometry_sequence_cache(self, tmp_path):
+    path = str(tmp_path / "geo.json")
+    payload = {"ts": 0.0, "sequence": 5, "points": [{"latitude": la, "longitude": lo} for la, lo in CORNER]}
+    with open(path, "w", encoding="utf-8") as f:
+      json.dump(payload, f)
+    preview = RouteCurvaturePreview(mate_source=MateGeometrySource(path))
+    preview.update_geometry()
+    first = list(preview.target_velocities)
+    preview.update_geometry()
+    assert preview.target_velocities == first
+
+  def test_stale_geometry_returns_false(self, tmp_path):
+    path = str(tmp_path / "geo.json")
+    payload = {"ts": 0.0, "sequence": 5, "points": [{"latitude": la, "longitude": lo} for la, lo in CORNER]}
+    with open(path, "w", encoding="utf-8") as f:
+      json.dump(payload, f)
+    old = time.time() - MATE_GEOMETRY_TIMEOUT - 5
+    os.utime(path, (old, old))
+    preview = RouteCurvaturePreview(mate_source=MateGeometrySource(path))
+    assert preview.update_geometry() is False
+
+  def test_mark_stale_invalidates_geometry(self, tmp_path):
+    path = str(tmp_path / "geo.json")
+    payload = {"ts": 0.0, "sequence": 5, "points": [{"latitude": la, "longitude": lo} for la, lo in CORNER]}
+    with open(path, "w", encoding="utf-8") as f:
+      json.dump(payload, f)
+    preview = RouteCurvaturePreview(mate_source=MateGeometrySource(path))
+    assert preview.update_geometry() is True
+    preview.mark_stale()
+    # sequence 已失效：文件未变也会重算（回落后再次进入时语义正确）
+    assert preview._geo_sequence == -1
+    assert preview.update_geometry() is True
 
 
 if __name__ == "__main__":

@@ -121,14 +121,23 @@ class SmartCruiseControlMap:
     return bool(sm[service].connected)
 
   def _update_target_velocities(self, sm: messaging.SubMaster) -> None:
-    """候选点集来源仲裁：carrot polyline 曲率预览优先，OSM param 兜底。"""
-    if self.carrot_enabled and self._carrot_navi_fresh(sm):
-      self.carrot_preview.update(sm['carrotNavi'])
-      if self.carrot_preview.valid:
+    """候选点集来源仲裁：mate /route_geometry 高分辨率几何 > carrot polyline 曲率预览 > OSM param。
+
+    v6 起 carrotmate 用高德路线 API 上行全程几何（≤1024 点，落盘文件按 mtime
+    新鲜度消费），能覆盖匝道内部曲率（polyline 256 点降采样的已知局限）。
+    两个 carrot 源全部 fail-open：掉线/过期回落 OSM MapTargetVelocities。
+    """
+    if self.carrot_enabled:
+      if self.carrot_preview.update_geometry():
         self.target_velocities = self.carrot_preview.target_velocities
         return
-    else:
-      self.carrot_preview.mark_stale()
+      if self._carrot_navi_fresh(sm):
+        self.carrot_preview.update(sm['carrotNavi'])
+        if self.carrot_preview.valid:
+          self.target_velocities = self.carrot_preview.target_velocities
+          return
+      else:
+        self.carrot_preview.mark_stale()
     self.target_velocities = velocities_from_param("MapTargetVelocities", self.mem_params) or []
 
   def update_calculations(self, sm: messaging.SubMaster) -> None:
