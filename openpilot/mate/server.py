@@ -17,17 +17,31 @@ mate — 车机事件实时推送服务（局域网）
                              device/…/params，见 poller.py v5 小节；不周期推流）
   GET /health             健康检查（不鉴权，含 poller 心跳新鲜度与 onroad 标志）
   GET /sounds/<file.wav>  播放 sound 事件对应的音效文件（随语言目录切换）
+  POST /command           v6 动作命令（白名单 + offroad_only + 敏感鉴权；需确认命令回 pending）
+  POST /command/confirm   v6 确认闭环回传（approve/deny，超时默认 deny）
+  POST /route_geometry    v6 carrotmate 上行高分辨率路线几何（喂曲率预览，只降不升）
 
 WS 客户端也可发 {"type":"snapshot"} 走同一条连接拿快照。协议文档见 mate/API.md。
 
-协议 v5（当前，PROTOCOL_VERSION = 5，FLAVOR = "sunnypilot"）：kind 集
-events/opstate/button/sound/frame 不变；hello 带 fork 标识 flavor（客户端门控主键，
-非本 fork 的客户端按协议不匹配处理）；frame 含 carrot 段（carrotMan 遥测，v4 引入）；
-/state 与 WS snapshot 扩展 19 个纯快照段（device/peripheral/manager/proc/backup/temp/
-carParams/controls/carSP/control/plan/loc/gps/map/model/dmodel/odom/calib/params，
-见 poller.py v5 小节与 API.md §5.3——文档计数写作 18，以段名列表为准）。旧客户端按
-既有约定忽略未知段/未知字段即可，无破坏性变更。历史：v4 = frame 增加 carrot 段；
-v3 = kind 收窄 + 2Hz frame（v3 客户端收到版本不符的 error 后自行停止重连）。
+协议 v6（当前，PROTOCOL_VERSION = 6，FLAVOR = "sunnypilot"）：kind 集
+events/opstate/button/sound/frame/confirm 不变（v6 新增 confirm，见下）；
+hello 带 fork 标识 flavor（客户端门控主键，非本 fork 的客户端按协议不匹配处理）；
+frame 含 carrot 段（carrotMan 遥测，v4 引入）；/state 与 WS snapshot 扩展 19 个
+纯快照段（device/peripheral/manager/proc/backup/temp/carParams/controls/carSP/
+control/plan/loc/gps/map/model/dmodel/odom/calib/params，见 poller.py v5 小节与
+API.md §5.3——文档计数写作 18，以段名列表为准）。旧客户端按既有约定忽略未知
+段/未知字段即可，无破坏性变更。历史：v5 = params 读写 API（双向控制）；
+v4 = frame 增加 carrot 段；v3 = kind 收窄 + 2Hz frame（v3 客户端收到版本不符的
+error 后自行停止重连）。
+
+v6 新增（本协议面均需 MateToken 已配置才能调用，见 require_sensitive_auth）：
+- POST /command：动作命令通道（白名单命令，offroad_only；需确认的命令走
+  服务端确认闭环，broadcast confirm kind 并等待 POST /command/confirm）。
+- POST /command/confirm：确认闭环回传端点（approve/deny；超时默认 deny）。
+- POST /route_geometry：carrotmate 上行高分辨率路线几何（喂 RouteCurvaturePreview，
+  替代 256 点 polyline 的粗分辨率；只降不升，fail-open）。
+- param 写白名单扩容：控车相关参数（ALC/MADS/personality/SCC 等）标注
+  offroad_only，行驶中（或 onroad 状态未知时）一律拒写（409/503）。
 
 WS 鉴权失败在升级后发 {"type":"error"} 帧再关闭（SSE 仍为 HTTP 401）。
 
@@ -54,9 +68,9 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.mate.poller import MatePoller
 
 PORT = int(os.environ.get("MATE_PORT", "8083"))
-PROTOCOL_VERSION = 5  # v5：kind 集不变，/state 与 WS snapshot 扩展 18 个纯快照段（见 poller.py v5 小节）；旧客户端忽略未知段即可
+PROTOCOL_VERSION = 6  # v6：新增 confirm kind、/command、/command/confirm、/route_geometry 与 offroad_only 写门控
 FLAVOR = "sunnypilot"  # 上游 fork 标识：sunnypilot / carrotpilot，客户端据此区分数据面差异（如 carrotMan、SP 段的有无）
-ALL_KINDS = ("events", "opstate", "button", "sound", "frame")
+ALL_KINDS = ("events", "opstate", "button", "sound", "frame", "confirm")
 STATE_KINDS = ("events", "opstate", "sound")  # emit 时同步写进 /state 快照的类型；
 # frame 不在其中——其 car/radar 段由 poller 显式喂快照，kind 本身只广播不进快照
 REPLAY_KINDS = ("events", "sound")  # 新连接先补发这两类的当前状态（frame 走快照初始化）
@@ -120,37 +134,72 @@ def check_auth(request: web.BaseRequest) -> None:
     raise web.HTTPUnauthorized(text='{"error":"invalid token"}', content_type="application/json")
 
 
-# ── params 读写（#6 双向控制：搭子调设备参数）──────────────────────────
-# 读：白名单内任意 key；写：白名单 + MateToken 鉴权（设了 token 才验，同 WS/SSE 口径）。
+# ── params 读写（#6 双向控制 + v6 白名单扩容）──────────────────────────
+# 读：白名单内任意 key；写：白名单 + MateToken 鉴权 + offroad_only 门控。
 # 响应形状对齐 CarrotPilot 7000 carrot_server 契约（{ok, values} / {ok, name, value}），
 # carrotmate 端 CarrotParamClient 可按同一解析逻辑对接任一端口。
-PARAMS_WHITELIST: dict[str, str] = {
+#
+# 白名单条目：(kind, lo, hi, offroad_only)
+# - kind：bool / int / float（None 表示无值域约束）
+# - offroad_only=True 的键在 onroad（或 onroad 状态未知）时一律拒写——这些参数
+#   直接改变控车行为，远程改写必须停车操作（controls-safety 门禁）。
+#   v5 既有 8 键保持任意时刻可写（兼容既有客户端行为）。
+PARAMS_WHITELIST: dict[str, tuple[str, float | None, float | None, bool]] = {
   # 导航变道闸门（carrotmate 上行，fail-open）
-  "NaviGuidedLaneChangeEnabled": "bool",
-  "NaviLaneChangeDirectionEnabled": "bool",   # 拨杆方向冲突抑制（默认关）
-  "NaviLaneChangeTurnDistance": "int",        # meters
-  "NaviLaneChangeCrossroadDistance": "int",   # meters
-  "NaviLaneChangeSignalDistance": "int",      # meters, crossroad 缺席时红绿灯兜底
-  "NaviLaneChangeDirectionDistance": "int",   # meters, 方向冲突窗口
+  "NaviGuidedLaneChangeEnabled": ("bool", None, None, False),
+  "NaviLaneChangeDirectionEnabled": ("bool", None, None, False),  # 拨杆方向冲突抑制（默认关）
+  "NaviLaneChangeTurnDistance": ("int", 0, 2000, False),        # meters
+  "NaviLaneChangeCrossroadDistance": ("int", 0, 2000, False),   # meters
+  "NaviLaneChangeSignalDistance": ("int", 0, 2000, False),      # meters, crossroad 缺席时红绿灯兜底
+  "NaviLaneChangeDirectionDistance": ("int", 0, 2000, False),   # meters, 方向冲突窗口
   # 匝道/弯道曲率预减速（SCC-M 数据源仲裁，默认关）
-  "CarrotRouteCurvatureEnabled": "bool",
+  "CarrotRouteCurvatureEnabled": ("bool", None, None, False),
   # 兼容既有通道（cem 实验模式开关）
-  "ExperimentalMode": "bool",
+  "ExperimentalMode": ("bool", None, None, False),
+  # ── v6 控车相关扩容（全部 offroad_only）──
+  # 自动变道（selfdrive/controls/lib/auto_lane_change.py）
+  "AutoLaneChangeTimer": ("int", -1, 5, True),        # -1=Off 0=Nudge 1=Nudgeless 2..5=0.5/1/2/3s
+  "AutoLaneChangeBsmDelay": ("bool", None, None, True),
+  "LaneTurnDesire": ("bool", None, None, True),       # 低速打灯变道
+  "LaneTurnValue": ("float", 0, 100, True),           # 低速阈值（mph，默认 19）
+  # MADS（sunnypilot）
+  "Mads": ("bool", None, None, True),
+  "MadsMainCruiseAllowed": ("bool", None, None, True),
+  "MadsSteeringMode": ("int", 0, 2, True),
+  "MadsUnifiedEngagementMode": ("bool", None, None, True),
+  # 纵向 / 巡航
+  "LongitudinalPersonality": ("int", 0, 2, True),     # 0=relaxed 1=standard 2=rapid
+  "SpeedLimitMode": ("int", 0, 2, True),
+  "SmartCruiseControlMap": ("bool", None, None, True),
+  "SmartCruiseControlVision": ("bool", None, None, True),
+  "IntelligentCruiseButtonManagement": ("bool", None, None, True),
 }
-PARAMS_DISTANCE_RANGE = (0, 2000)  # meters，距离类参数统一界
 
 
 def _param_readable(name: str) -> bool:
   return name in PARAMS_WHITELIST
 
 
+def _param_check_offroad(name: str) -> web.Response | None:
+  """offroad_only 键的写前门控：onroad 拒写（409），onroad 状态未知也拒写（503）。
+  状态未知时宁可拒服务也不放行——「宁可迟钝不可错记」。返回 None 表示放行。"""
+  if not PARAMS_WHITELIST[name][3]:
+    return None
+  onroad = hub.onroad()
+  if onroad is True:
+    return web.json_response({"ok": False, "error": f"{name} is offroad_only (driving)"}, status=409)
+  if onroad is None:
+    return web.json_response({"ok": False, "error": f"{name} is offroad_only but onroad state unknown"}, status=503)
+  return None
+
+
 def _param_coerce(name: str, value) -> object:
-  """按白名单类型归一写入口的值；类型不符抛 ValueError。
+  """按白名单类型归一写入口的值；类型或值域不符抛 ValueError。
 
   BOOL 键宽容归一（真布尔 / 1|0 / "true"|"false"），兼容 carrotmate 现有
   value:1|0 的 carrot 7000 请求形态与 mate 的 value:true|false 形态。
   """
-  kind = PARAMS_WHITELIST[name]
+  kind, lo, hi, _ = PARAMS_WHITELIST[name]
   if kind == "bool":
     if isinstance(value, bool):
       return value
@@ -165,22 +214,32 @@ def _param_coerce(name: str, value) -> object:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
       raise ValueError(f"{name} 需要 int")
     iv = int(value)
-    if iv < PARAMS_DISTANCE_RANGE[0] or iv > PARAMS_DISTANCE_RANGE[1]:
-      raise ValueError(f"{name} 超出 {PARAMS_DISTANCE_RANGE}")
+    if (lo is not None and iv < lo) or (hi is not None and iv > hi):
+      raise ValueError(f"{name} 超出 [{lo}, {hi}]")
     return iv
+  if kind == "float":
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+      raise ValueError(f"{name} 需要 float")
+    fv = float(value)
+    if (lo is not None and fv < lo) or (hi is not None and fv > hi):
+      raise ValueError(f"{name} 超出 [{lo}, {hi}]")
+    return fv
   raise ValueError(f"{name} 类型不支持写入")
 
 
 def _param_out(name: str, raw) -> object:
-  """读出口归一：BOOL 键回真布尔，INT 键回整数，异常路径回 None。"""
-  kind = PARAMS_WHITELIST[name]
+  """读出口归一：BOOL 键回真布尔，INT 键回整数，FLOAT 键回浮点，异常路径回 None。"""
+  kind = PARAMS_WHITELIST[name][0]
   try:
+    if isinstance(raw, (bytes, bytearray)):
+      raw = raw.decode("utf-8", "ignore").strip()
+      raw = {"1": True, "0": False, "true": True, "false": False}.get(raw.lower(), raw) if kind == "bool" else raw
     if kind == "bool":
-      if isinstance(raw, (bytes, bytearray)):
-        return raw.decode("utf-8", "ignore").strip() == "1"
       return bool(raw)
     if kind == "int":
-      return int(raw)
+      return int(float(raw))
+    if kind == "float":
+      return float(raw)
   except (TypeError, ValueError):
     return None
   return raw
@@ -213,6 +272,9 @@ async def param_set_handler(request: web.Request) -> web.Response:
   name, value = body.get("name"), body.get("value")
   if not _param_readable(name):
     return web.json_response({"ok": False, "error": f"key not allowed: {name}"}, status=403)
+  offroad_reject = _param_check_offroad(name)
+  if offroad_reject is not None:
+    return offroad_reject
   try:
     coerced = _param_coerce(name, value)
   except ValueError as e:
@@ -227,6 +289,248 @@ async def param_set_handler(request: web.Request) -> web.Response:
   except Exception:
     echo = coerced
   return web.json_response({"ok": True, "name": name, "value": echo})
+
+
+# ── v6 动作命令通道（/command + /command/confirm）──────────────────────
+# 边界（controls-safety 门禁）：
+# - 命令白名单严格收敛，只收编「仓库内有真实消费方」的机制，不发明伪造钩子
+#   （manager 退出后 launch 脚本不重启 openpilot，故无 restart 命令——机制核实
+#   前宁可没有）。
+# - 全部命令 offroad_only；需确认的命令走服务端确认闭环：POST /command 先回
+#   pending + broadcast confirm kind，客户端 POST /command/confirm 回传，超时
+#   默认 deny。
+# - 鉴权用 require_sensitive_auth：token 未配置直接 403，不复用「未配置即放行」。
+COMMANDS: dict[str, dict] = {
+  # backup_manager（sunnypilot/sunnylink/backups/manager.py:253）轮询该 param 触发备份
+  "trigger_backup": {"title": "创建参数备份", "confirm": False, "offroad_only": True},
+  # 本地清理过期 swaglog / crash 日志（文件删除，必须二次确认）
+  "clear_logs": {"title": "清理过期日志", "confirm": True, "offroad_only": True},
+  # 设备重启：manager.py:183 主循环轮询 DoReboot → 退出 → HARDWARE.reboot()
+  # （真钩子）。没有「只重启 openpilot 不重启设备」的机制——manager 退出后
+  # launch 脚本只挂起不重启，故不提供 restart_openpilot 伪命令。
+  "reboot_device": {"title": "重启设备", "confirm": True, "offroad_only": True},
+}
+CONFIRM_TIMEOUT_S = 60.0
+LOG_SWAGLOG_KEEP_DAYS = 7
+LOG_CRASH_KEEP_DAYS = 30
+
+_confirm_lock = threading.Lock()
+_pending_confirms: dict[str, dict] = {}  # id -> {command, deadline, ts, title}
+
+
+def require_sensitive_auth(request: web.Request) -> None:
+  """v6 敏感端点鉴权：token 未配置直接 403（先配对再谈控制），
+  已配置则走常规比对。与 check_auth 的「未配置即放行」语义刻意不同。"""
+  if not read_token():
+    raise web.HTTPForbidden(text='{"error":"token not configured; set MateToken first"}', content_type="application/json")
+  if not auth_ok(request):
+    raise web.HTTPUnauthorized(text='{"error":"invalid token"}', content_type="application/json")
+
+
+def _command_check_offroad(name: str) -> web.Response | None:
+  """命令的 offroad 门控：onroad 拒执行（409），状态未知拒执行（503）。"""
+  if not COMMANDS[name]["offroad_only"]:
+    return None
+  onroad = hub.onroad()
+  if onroad is True:
+    return web.json_response({"ok": False, "error": f"command {name} is offroad_only (driving)"}, status=409)
+  if onroad is None:
+    return web.json_response({"ok": False, "error": f"command {name} is offroad_only but onroad state unknown"}, status=503)
+  return None
+
+
+def _exec_trigger_backup() -> str:
+  """触发参数备份：backup_manager 仅在 offroad 轮询到该 param 时执行（真钩子）。"""
+  Params().put("BackupManager_CreateBackup", True, block=True)
+  return "BackupManager_CreateBackup set; backup_manager (offroad) will consume it"
+
+
+def _exec_reboot_device() -> str:
+  """设备重启：manager 主循环轮询到 DoReboot 后退出并 HARDWARE.reboot()（真钩子）。"""
+  Params().put("DoReboot", True, block=True)
+  return "DoReboot set; manager will exit and reboot the device"
+
+
+def _exec_clear_logs(now: float | None = None) -> str:
+  """删除过期日志：swaglog 超 7 天、crash 超 30 天。返回删除计数摘要。"""
+  from openpilot.common.hardware.hw import Paths
+  now = wallclock() if now is None else now
+  removed = 0
+  for root, keep_days in ((Paths.swaglog_root(), LOG_SWAGLOG_KEEP_DAYS), (Paths.crash_log_root(), LOG_CRASH_KEEP_DAYS)):
+    try:
+      entries = os.listdir(root)
+    except OSError:
+      continue
+    for entry in entries:
+      path = os.path.join(root, entry)
+      try:
+        if os.path.isfile(path) and now - os.path.getmtime(path) > keep_days * 86400:
+          os.remove(path)
+          removed += 1
+      except OSError:
+        continue
+  return f"removed {removed} old log files (swaglog>{LOG_SWAGLOG_KEEP_DAYS}d, crash>{LOG_CRASH_KEEP_DAYS}d)"
+
+
+_EXECUTORS = {
+  "trigger_backup": _exec_trigger_backup,
+  "clear_logs": _exec_clear_logs,
+  "reboot_device": _exec_reboot_device,
+}
+
+
+def _create_confirm(command: str) -> dict:
+  """登记一条待确认命令并 broadcast confirm 事件（所有默认订阅客户端可见）。"""
+  import uuid
+  meta = COMMANDS[command]
+  confirm_id = uuid.uuid4().hex[:16]
+  record = {
+    "id": confirm_id,
+    "command": command,
+    "title": meta["title"],
+    "ts": wallclock(),
+    "deadline": time.monotonic() + CONFIRM_TIMEOUT_S,
+  }
+  with _confirm_lock:
+    _pending_confirms[confirm_id] = record
+  hub.emit("confirm", {
+    "id": confirm_id, "command": command, "title": meta["title"],
+    "timeout_s": CONFIRM_TIMEOUT_S, "status": "pending", "ts": record["ts"],
+  })
+  return {"id": confirm_id, "command": command, "title": meta["title"], "timeout_s": CONFIRM_TIMEOUT_S}
+
+
+def _resolve_confirm(confirm_id: str, status: str) -> None:
+  """确认终态（approved/denied/expired）broadcast，客户端据此关闭对应弹窗。"""
+  hub.emit("confirm", {"id": confirm_id, "status": status, "ts": wallclock()})
+
+
+def _pop_confirm(confirm_id: str) -> dict | None:
+  with _confirm_lock:
+    record = _pending_confirms.pop(confirm_id, None)
+    if record is None:
+      return None
+    if time.monotonic() > record["deadline"]:
+      return {"expired": True}
+    return record
+
+
+async def command_handler(request: web.Request) -> web.Response:
+  require_sensitive_auth(request)
+  try:
+    body = await request.json()
+  except Exception:
+    return web.json_response({"ok": False, "error": "body must be json"}, status=400)
+  name = body.get("command")
+  if name not in COMMANDS:
+    return web.json_response({"ok": False, "error": f"unknown command: {name}"}, status=400)
+  offroad_reject = _command_check_offroad(name)
+  if offroad_reject is not None:
+    return offroad_reject
+  if COMMANDS[name]["confirm"]:
+    pending = _create_confirm(name)
+    return web.json_response({"ok": True, "status": "pending", "confirm": pending})
+  try:
+    detail = await asyncio.to_thread(_EXECUTORS[name])
+  except Exception as e:
+    return web.json_response({"ok": False, "error": f"command failed: {e}"}, status=500)
+  return web.json_response({"ok": True, "status": "executed", "command": name, "detail": detail})
+
+
+async def command_confirm_handler(request: web.Request) -> web.Response:
+  require_sensitive_auth(request)
+  try:
+    body = await request.json()
+  except Exception:
+    return web.json_response({"ok": False, "error": "body must be json"}, status=400)
+  confirm_id, approve = body.get("id"), body.get("approve")
+  if not confirm_id or not isinstance(approve, bool):
+    return web.json_response({"ok": False, "error": "id and approve(bool) required"}, status=400)
+  record = _pop_confirm(confirm_id)
+  if record is None:
+    return web.json_response({"ok": False, "error": "unknown confirm id"}, status=404)
+  if record.get("expired"):
+    _resolve_confirm(confirm_id, "expired")
+    return web.json_response({"ok": False, "error": "confirm expired (default deny)"}, status=410)
+  command = record["command"]
+  if not approve:
+    _resolve_confirm(confirm_id, "denied")
+    return web.json_response({"ok": True, "status": "denied", "command": command})
+  _resolve_confirm(confirm_id, "approved")
+  try:
+    detail = await asyncio.to_thread(_EXECUTORS[command])
+  except Exception as e:
+    return web.json_response({"ok": False, "error": f"command failed: {e}"}, status=500)
+  return web.json_response({"ok": True, "status": "executed", "command": command, "detail": detail})
+
+
+# ── v6 路线几何上行（/route_geometry）──────────────────────────────────
+# carrotmate 用高德路线 API 拿到全程几何（远高于 7706 polyline 的 256 点降采样），
+# 原子写本地 JSON 文件；plannerd 侧 RouteCurvaturePreview 按 mtime 新鲜度消费
+# （见 selfdrive/carrot/route_curvature.py MateGeometrySource）。只降不升、fail-open。
+GEOMETRY_MAX_POINTS = 1024
+GEOMETRY_MIN_POINTS = 3
+GEOMETRY_PATH_DEFAULT = "/data/mate/route_geometry.json"
+
+
+def geometry_path() -> str:
+  return os.environ.get("MATE_GEOMETRY_PATH", GEOMETRY_PATH_DEFAULT)
+
+
+def _norm_geometry_points(points) -> list[dict]:
+  """归一上行点集：[[lat,lon],...] 或 [{"latitude","longitude"},...]；非法点抛 ValueError。"""
+  out = []
+  for p in points:
+    if isinstance(p, dict):
+      lat, lon = p.get("latitude"), p.get("longitude")
+    elif isinstance(p, (list, tuple)) and len(p) == 2:
+      lat, lon = p[0], p[1]
+    else:
+      raise ValueError("point format must be [lat,lon] or {latitude,longitude}")
+    if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)) or isinstance(lat, bool) or isinstance(lon, bool):
+      raise ValueError("point coordinates must be numbers")
+    lat, lon = float(lat), float(lon)
+    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0) or lat != lat or lon != lon:
+      raise ValueError(f"point out of range: {lat},{lon}")
+    out.append({"latitude": lat, "longitude": lon})
+  return out
+
+
+async def route_geometry_handler(request: web.Request) -> web.Response:
+  """POST /route_geometry {"points": [...], "sequence": 可选}。导航是行驶态活动，
+  故不做 offroad 门控；限流靠点数上限与原子写。"""
+  check_auth(request)
+  try:
+    body = await request.json()
+  except Exception:
+    return web.json_response({"ok": False, "error": "body must be json"}, status=400)
+  points = body.get("points")
+  if not isinstance(points, list):
+    return web.json_response({"ok": False, "error": "points must be a list"}, status=400)
+  if not (GEOMETRY_MIN_POINTS <= len(points) <= GEOMETRY_MAX_POINTS):
+    return web.json_response({"ok": False, "error": f"points size must be {GEOMETRY_MIN_POINTS}..{GEOMETRY_MAX_POINTS}"}, status=400)
+  try:
+    norm = _norm_geometry_points(points)
+  except ValueError as e:
+    return web.json_response({"ok": False, "error": str(e)}, status=400)
+  seq = body.get("sequence")
+  seq = int(seq) if isinstance(seq, (int, float)) and not isinstance(seq, bool) else int(wallclock())
+  path = geometry_path()
+  payload = {"ts": wallclock(), "sequence": seq, "points": norm}
+  try:
+    await asyncio.to_thread(_atomic_write_json, path, payload)
+  except OSError as e:
+    return web.json_response({"ok": False, "error": f"write failed: {e}"}, status=500)
+  return web.json_response({"ok": True, "points": len(norm), "sequence": seq})
+
+
+def _atomic_write_json(path: str, payload: dict) -> None:
+  """tmp + os.replace 原子写，消费侧永远不会读到半截 JSON。"""
+  os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+  tmp = f"{path}.tmp"
+  with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+  os.replace(tmp, path)
 
 
 class Hub:
@@ -451,6 +755,9 @@ def main():
     web.get("/sounds/{filename}", sounds_handler),
     web.get("/params", params_read_handler),
     web.post("/param_set", param_set_handler),
+    web.post("/command", command_handler),
+    web.post("/command/confirm", command_confirm_handler),
+    web.post("/route_geometry", route_geometry_handler),
   ])
   cloudlog.event("mate listening", port=PORT)
   web.run_app(app, host="0.0.0.0", port=PORT, print=None)

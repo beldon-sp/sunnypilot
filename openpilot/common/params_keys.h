@@ -182,6 +182,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"DevUIInfo", {PERSISTENT | BACKUP, INT, "0"}},
     {"EnableCopyparty", {PERSISTENT | BACKUP, BOOL}},
     {"EnableGithubRunner", {PERSISTENT | BACKUP, BOOL}},
+    {"ExperimentalMode", {PERSISTENT | BACKUP, BOOL, "0"}},  // mate 白名单既有键：v6 补注册（此前未注册导致 /param_set 写入 500）
     {"GreenLightAlert", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"GithubRunnerSufficientVoltage", {CLEAR_ON_MANAGER_START , BOOL}},
     {"HasAcceptedTermsSP", {PERSISTENT, STRING, "0"}},

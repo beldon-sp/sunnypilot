@@ -4,7 +4,7 @@
 方向盘按键、播报声音四类**边沿事件**与 2Hz 的 **frame 周期状态帧**（car/radar 段）
 通过 **WebSocket** 或 **SSE** 推给局域网客户端，并提供一次性状态快照 `GET /state`。
 
-> **协议版本：v5**（`hello.version = 5`）。v2 → v3 迁移要点见 §9；v3 → v4 变更：`frame` 新增 `carrot` 段（carrotMan 遥测）；v4 → v5 变更：`GET /state` 与 WS `snapshot` 扩展 18 个纯快照段（§5.3），kind 白名单、推送语义与鉴权均不变；v5 追加：`hello` 新增 `flavor` 字段（fork 标识，本仓为 `sunnypilot`）。
+> **协议版本：v6**（`hello.version = 6`）。v2 → v3 迁移要点见 §9；v3 → v4 变更：`frame` 新增 `carrot` 段（carrotMan 遥测）；v4 → v5 变更：`GET /state` 与 WS `snapshot` 扩展 18 个纯快照段（§5.3），kind 白名单、推送语义与鉴权均不变；v5 追加：`hello` 新增 `flavor` 字段（fork 标识，本仓为 `sunnypilot`）、params 读写 API（§10.1）；v5 → v6 变更：kind 新增 `confirm`（命令确认闭环）、`POST /command` / `POST /command/confirm` / `POST /route_geometry`（§10.2-§10.4）、params 写白名单扩容并引入 offroad_only 门控（§10.1），均向后兼容（老客户端忽略未知 kind / 端点即可）。
 
 ## 0. 服务定位原则与架构
 
@@ -51,6 +51,11 @@
 | `http://<车机IP>:8083/state` | HTTP GET | ✔ | 一次性全量状态快照：数据段 + 服务状态段（见 §5） |
 | `http://<车机IP>:8083/sounds/<file.wav>` | HTTP GET | ✔ | sound 事件对应音效文件 |
 | `http://<车机IP>:8083/health` | HTTP GET | ✘ | 服务健康状态（含 poller 心跳新鲜度） |
+| `http://<车机IP>:8083/params` | HTTP GET | ✔ | 白名单参数读取（§10.1） |
+| `http://<车机IP>:8083/param_set` | HTTP POST | ✔ | 白名单参数写入（offroad_only 门控，§10.1） |
+| `http://<车机IP>:8083/command` | HTTP POST | **强制** | v6 动作命令通道（§10.2） |
+| `http://<车机IP>:8083/command/confirm` | HTTP POST | **强制** | v6 确认闭环回传（§10.3） |
+| `http://<车机IP>:8083/route_geometry` | HTTP POST | ✔ | v6 路线几何上行（§10.4） |
 
 车机 IP 在车机设置 / 路由器管理页查看，客户端需与车机在同一局域网。
 
@@ -84,8 +89,9 @@ rm /data/params/d/MateToken                          # 关
 | `button` | 方向盘按键按下/松开（边沿帧） | ✘ | ✘ |
 | `sound` | 播报声音切换（含 carrot 倒计时报数） | ✔ | ✔（正在播报时） |
 | `frame` | **2Hz 周期状态帧**（car/radar 段，驾驶屏连续值） | ✘（段进快照） | ✘（走快照） |
+| `confirm` | **v6**：命令确认请求与终态（pending/approved/denied/expired） | ✘ | ✘ |
 
-> v5 起 kind 集不变；扩展全部落在 `/state` 与 WS `snapshot` 的状态段上（§5.3）。
+> v5 起 kind 集不变（v6 仅新增 `confirm`）；扩展全部落在 `/state` 与 WS `snapshot` 的状态段上（§5.3）。
 
 ---
 
@@ -674,3 +680,66 @@ cd /data/openpilot && source launch_env.sh && python -m openpilot.mate
 | `/state` 与 WS `snapshot` | 8 段（car/radar/opstate/events/sound/panda/services/meta） | **新增 18 个纯快照段**（§5.3） | 老客户端无需改动（未知段忽略）；要消费新段（设备看板/规划/定位等）直接读对应段 |
 | kind 白名单 | events/opstate/button/sound/frame | 不变 | 无 |
 | 推送语义 | 边沿事件 + 2Hz frame | 不变（扩展全部在拉取侧快照） | 无 |
+
+---
+
+## 10. v5/v6 双向控制（params / 命令 / 确认 / 几何）
+
+### 10.1 params 读写（v5 引入，v6 扩容）
+
+- `GET /params?names=a,b,c` → `{"ok":true,"values":{<key>:<归一值>}}`；白名单外 key 403。
+- `POST /param_set` `{"name":..., "value":..., "source":可选}` → `{"ok":true,"name":...,"value":<读回回显>}`；
+  契约对齐 CarrotPilot 7000 `carrot_server`（carrotmate 端同一解析）。
+
+**白名单条目**：`(类型, 值域, offroad_only)`。v6 起类型含 bool/int/float，
+int/float 带值域校验（越界 400）。**offroad_only 键**（v6 控车相关扩容，全部标注）：
+
+| 组 | 键 |
+|---|---|
+| 自动变道 | `AutoLaneChangeTimer`(int -1..5)、`AutoLaneChangeBsmDelay`(bool)、`LaneTurnDesire`(bool)、`LaneTurnValue`(float 0..100) |
+| MADS | `Mads`、`MadsMainCruiseAllowed`、`MadsUnifiedEngagementMode`(bool)、`MadsSteeringMode`(int 0..2) |
+| 纵向/巡航 | `LongitudinalPersonality`(int 0..2)、`SpeedLimitMode`(int 0..2)、`SmartCruiseControlMap`、`SmartCruiseControlVision`、`IntelligentCruiseButtonManagement`(bool) |
+
+offroad_only 写入门控（controls-safety 门禁）：
+
+- onroad → **409** `{"ok":false,"error":"<key> is offroad_only (driving)"}`；
+- onroad 状态未知（poller 心跳缺失）→ **503**，宁可拒服务也不放行；
+- v5 既有 8 键（`NaviGuidedLaneChange*` / `NaviLaneChange*` / `CarrotRouteCurvatureEnabled` / `ExperimentalMode`）
+  保持任意时刻可写，兼容既有客户端。
+
+### 10.2 `POST /command`（v6）
+
+`{"command": "<name>"}`。**鉴权为强制语义**：`MateToken` 未配置直接 **403**（先配对再谈控制），
+已配置则常规校验（401）。命令白名单严格收敛，只收编仓库内有真实消费方的机制：
+
+| 命令 | 效果 | 确认 |
+|---|---|---|
+| `trigger_backup` | 置 `BackupManager_CreateBackup`（backup_manager offroad 轮询消费） | 不需要 |
+| `clear_logs` | 删除 swaglog（>7 天）与 crash（>30 天）过期文件 | 需要 |
+| `reboot_device` | 置 `DoReboot`（manager 主循环消费 → `HARDWARE.reboot()`） | 需要 |
+
+响应：
+
+- 需确认命令 → `{"ok":true,"status":"pending","confirm":{id,command,title,timeout_s}}`，
+  同时 broadcast `confirm` kind（pending）；确认前**不执行**。
+- offroad 门控同 §10.1：onroad 409 / 状态未知 503。
+- 不提供 `restart_openpilot`：manager 退出后 launch 脚本只挂起不重启，无该机制不发明伪钩子。
+
+### 10.3 `POST /command/confirm`（v6）
+
+`{"id":..., "approve":true|false}`。pending 确认闭环回传：
+
+- `approve:true` → 执行命令 → `{"ok":true,"status":"executed","command":...,"detail":...}`；
+- `approve:false` → `{"ok":true,"status":"denied"}`；
+- 超时（60s）→ **410** `{"ok":false,"error":"confirm expired (default deny)"}`；
+- 终态（approved/denied/expired）均 broadcast `confirm` kind，客户端据此关闭弹窗；
+- 未知 id → 404；用完即焚（同一 id 二次确认 404）。
+
+### 10.4 `POST /route_geometry`（v6）
+
+`{"points": [[lat,lon],...] 或 [{"latitude","longitude"},...], "sequence": 可选}`。
+carrotmate 用高德路线 API 上行全程几何（3..1024 点），服务端原子写 `/data/mate/route_geometry.json`
+（`MATE_GEOMETRY_PATH` 可覆盖）。消费方为 `RouteCurvaturePreview`（plannerd SCC-M）：
+
+- 文件 mtime 新鲜度 30s，坏文件/过期 fail-open 回落 carrotNavi polyline → OSM；
+- 只降不升（SCC-M 软顶语义不变）；导航是行驶态活动，本端点不做 offroad 门控。

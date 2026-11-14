@@ -180,10 +180,139 @@ class TestWhitelistShape:
                 "CarrotRouteCurvatureEnabled", "ExperimentalMode"):
       assert key in server.PARAMS_WHITELIST
 
+  def test_whitelist_covers_v6_control_params(self):
+    # v6 控车相关扩容：全部存在且标注 offroad_only
+    for key in ("AutoLaneChangeTimer", "AutoLaneChangeBsmDelay", "LaneTurnDesire",
+                "LaneTurnValue", "Mads", "MadsMainCruiseAllowed", "MadsSteeringMode",
+                "MadsUnifiedEngagementMode", "LongitudinalPersonality", "SpeedLimitMode",
+                "SmartCruiseControlMap", "SmartCruiseControlVision",
+                "IntelligentCruiseButtonManagement"):
+      entry = server.PARAMS_WHITELIST[key]
+      assert entry[0] in ("bool", "int", "float")
+      assert entry[3] is True, f"{key} 必须标注 offroad_only"
+
+  def test_v5_keys_remain_anytime_writable(self):
+    # 兼容既有客户端：v5 8 键不得改为 offroad_only
+    for key in ("NaviGuidedLaneChangeEnabled", "NaviLaneChangeDirectionEnabled",
+                "NaviLaneChangeTurnDistance", "NaviLaneChangeCrossroadDistance",
+                "NaviLaneChangeSignalDistance", "NaviLaneChangeDirectionDistance",
+                "CarrotRouteCurvatureEnabled", "ExperimentalMode"):
+      assert server.PARAMS_WHITELIST[key][3] is False
+
   def test_no_other_params_leak(self):
     # 防扩散：白名单严格收敛，不得混入无关 key
     assert "MateToken" not in server.PARAMS_WHITELIST
-    assert len(server.PARAMS_WHITELIST) == 8
+    assert len(server.PARAMS_WHITELIST) == 21
+
+  def test_no_credential_like_keys(self):
+    # 凭据类键永远不得进入白名单（写通道只对控行为）
+    for key in ("MateToken", "AccessToken", "GithubSshKeys", "SecOCKey", "DongleId"):
+      assert key not in server.PARAMS_WHITELIST
+
+
+class TestOffroadOnlyGate:
+  """v6 offroad_only 门控：onroad 拒写 409，状态未知拒写 503，offroad 放行。"""
+
+  def _patch_onroad(self, monkeypatch, value):
+    class _HubStub:
+      def onroad(self):
+        return value
+    monkeypatch.setattr(server, "hub", _HubStub())
+
+  def test_control_param_rejected_onroad(self, params_dir, monkeypatch):
+    self._patch_onroad(monkeypatch, True)
+
+    async def body():
+      client = await _client()
+      try:
+        resp = await client.post("/param_set", json={"name": "AutoLaneChangeTimer", "value": 1})
+        assert resp.status == 409
+        assert params_dir.get("AutoLaneChangeTimer") is None
+        # v5 既有键不受影响
+        resp = await client.post("/param_set", json={"name": "ExperimentalMode", "value": True})
+        assert resp.status == 200
+      finally:
+        await client.close()
+
+    _run(body())
+
+  def test_control_param_rejected_when_state_unknown(self, params_dir, monkeypatch):
+    self._patch_onroad(monkeypatch, None)
+
+    async def body():
+      client = await _client()
+      try:
+        resp = await client.post("/param_set", json={"name": "Mads", "value": False})
+        assert resp.status == 503
+        assert params_dir.get("Mads") is None
+      finally:
+        await client.close()
+
+    _run(body())
+
+  def test_control_param_allowed_offroad(self, params_dir, monkeypatch):
+    self._patch_onroad(monkeypatch, False)
+
+    async def body():
+      client = await _client()
+      try:
+        resp = await client.post("/param_set", json={"name": "AutoLaneChangeTimer", "value": 1})
+        assert resp.status == 200
+        assert params_dir.get("AutoLaneChangeTimer") == 1
+      finally:
+        await client.close()
+
+    _run(body())
+
+
+class TestFloatParams:
+  def test_float_roundtrip(self, params_dir, monkeypatch):
+    class _HubStub:
+      def onroad(self):
+        return False
+    monkeypatch.setattr(server, "hub", _HubStub())
+
+    async def body():
+      client = await _client()
+      try:
+        resp = await client.post("/param_set", json={"name": "LaneTurnValue", "value": 25.5})
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["value"] == 25.5
+        resp = await client.get("/params", params={"names": "LaneTurnValue"})
+        assert (await resp.json())["values"]["LaneTurnValue"] == 25.5
+        # 越界拒写
+        resp = await client.post("/param_set", json={"name": "LaneTurnValue", "value": 500})
+        assert resp.status == 400
+        # bool 冒充 float 拒写
+        resp = await client.post("/param_set", json={"name": "LaneTurnValue", "value": True})
+        assert resp.status == 400
+      finally:
+        await client.close()
+
+    _run(body())
+
+
+class TestIntRangeV6:
+  def test_alc_timer_range(self, params_dir, monkeypatch):
+    class _HubStub:
+      def onroad(self):
+        return False
+    monkeypatch.setattr(server, "hub", _HubStub())
+
+    async def body():
+      client = await _client()
+      try:
+        resp = await client.post("/param_set", json={"name": "AutoLaneChangeTimer", "value": -1})
+        assert resp.status == 200
+        resp = await client.post("/param_set", json={"name": "AutoLaneChangeTimer", "value": 5})
+        assert resp.status == 200
+        resp = await client.post("/param_set", json={"name": "AutoLaneChangeTimer", "value": 6})
+        assert resp.status == 400
+      finally:
+        await client.close()
+
+    _run(body())
 
 
 if __name__ == "__main__":
