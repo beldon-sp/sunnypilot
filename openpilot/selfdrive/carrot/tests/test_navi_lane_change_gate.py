@@ -1,7 +1,11 @@
-"""导航变道许可闸门测试：fail-open 契约 + 三种抑制条件 + DesireHelper 接缝。
+"""导航变道许可闸门测试：fail-open 契约 + 抑制条件 + 方向冲突 + DesireHelper 接缝。
 
 - fail-open：闸门未启用 / carrotmate 掉线 / 数据无效 → 恒放行（= 现有纯拨杆 ALC）
 - 抑制：临近转向/匝道（<300m）、crossroad（<150m）、单车道，仅在数据新鲜时生效
+- crossroad 兜底（#7）：crossroad 缺席（高德 SDK 路径）时以 trafficSignal 作
+  路口临近代理；crossroad 在场（广播路径）时红绿灯流不参与抑制
+- 方向冲突（#1）：导航转向方向与拨杆方向相反 → 阻断，默认关
+  （NaviLaneChangeDirectionEnabled）
 - DesireHelper 接缝：navi_lc_allowed=False 时 preLaneChange 不得进入 laneChangeStarting
 """
 import tempfile
@@ -16,7 +20,7 @@ from openpilot.selfdrive.carrot.navi_lane_change_gate import (
   BLOCK_TURN_TYPES,
   NaviLaneChangeGate,
 )
-from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
+from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper, LaneChangeDirection
 from opendbc.car.structs import car
 
 
@@ -26,12 +30,16 @@ def _meta(present=True):
 
 def _navi(connected=True, lane_count=3, lane_present=True,
           turn_type=-1, turn_distance=1000, guidance_present=True,
-          crossroad_visible=False, crossroad_distance=0, crossroad_present=True):
+          crossroad_visible=False, crossroad_distance=0, crossroad_present=True,
+          next_turn_type=-1, next_turn_distance=1000, next_guidance_present=True,
+          signal_visible=False, signal_distance=0, signal_present=True):
   return SimpleNamespace(
     connected=connected,
     laneCurrent=SimpleNamespace(meta=_meta(lane_present), count=lane_count),
     guidanceCurrent=SimpleNamespace(meta=_meta(guidance_present), turnType=turn_type, distanceM=turn_distance),
+    guidanceNext=SimpleNamespace(meta=_meta(next_guidance_present), turnType=next_turn_type, distanceM=next_turn_distance),
     crossroad=SimpleNamespace(meta=_meta(crossroad_present), visible=crossroad_visible, distanceM=crossroad_distance),
+    trafficSignal=SimpleNamespace(meta=_meta(signal_present), visible=signal_visible, distanceM=signal_distance),
   )
 
 
@@ -140,6 +148,91 @@ class TestSuppression:
   def test_missing_item_meta_allows(self):
     gate = self._enabled_gate()
     assert gate.update(FakeSM(_navi(lane_present=False, guidance_present=False, crossroad_present=False))) is True
+
+
+class TestCrossroadSignalFallback:
+  """#7：crossroad 缺席（高德 SDK 路径）时以 trafficSignal 作路口临近代理。"""
+
+  def _enabled_gate(self):
+    gate = fresh_gate()
+    gate.enabled = True
+    return gate
+
+  def test_signal_fallback_blocks(self):
+    # crossroad 流缺席 + 红绿灯可见且 <150m → 抑制（SDK 路径主路径）
+    gate = self._enabled_gate()
+    assert gate.update(FakeSM(_navi(crossroad_present=False, signal_visible=True, signal_distance=149))) is False
+    assert gate.block_reason == "near_crossroad"
+
+  def test_signal_fallback_distance_boundary(self):
+    gate = self._enabled_gate()
+    assert gate.update(FakeSM(_navi(crossroad_present=False, signal_visible=True, signal_distance=150))) is True
+    assert gate.update(FakeSM(_navi(crossroad_present=False, signal_visible=True, signal_distance=0))) is True
+
+  def test_signal_invisible_or_absent_allows(self):
+    gate = self._enabled_gate()
+    assert gate.update(FakeSM(_navi(crossroad_present=False, signal_visible=False, signal_distance=50))) is True
+    assert gate.update(FakeSM(_navi(crossroad_present=False, signal_present=False))) is True
+
+  def test_crossroad_present_signal_ignored(self):
+    # 广播路径：crossroad 在场但不可见时，红绿灯流不得兜底抑制
+    gate = self._enabled_gate()
+    assert gate.update(FakeSM(_navi(crossroad_present=True, crossroad_visible=False,
+                                    signal_visible=True, signal_distance=50))) is True
+
+  def test_crossroad_absent_but_signal_far_allows(self):
+    gate = self._enabled_gate()
+    assert gate.update(FakeSM(_navi(crossroad_present=False, signal_visible=True, signal_distance=500))) is True
+
+
+class TestDirectionConflict:
+  """#1：导航转向方向与拨杆方向相反 → 阻断；默认关（NaviLaneChangeDirectionEnabled）。"""
+
+  def _navi_gate(self, direction_enabled=False):
+    gate = fresh_gate()
+    gate.params.put_bool("NaviGuidedLaneChangeEnabled", True, block=True)
+    gate.params.put_bool("NaviLaneChangeDirectionEnabled", direction_enabled, block=True)
+    gate._read_params()
+    return gate
+
+  def test_disabled_by_default(self):
+    # 方向冲突条件默认关闭：即使方向相反也放行
+    gate = self._navi_gate(direction_enabled=False)
+    navi = _navi(turn_type=12, turn_distance=400)  # 左转 400m（超 near_turn 窗口）
+    assert gate.update(FakeSM(navi), LaneChangeDirection.right) is True
+
+  def test_opposite_direction_blocks(self):
+    gate = self._navi_gate(direction_enabled=True)
+    navi = _navi(turn_type=12, turn_distance=400)  # guidanceCurrent 左转 400m
+    assert gate.update(FakeSM(navi), LaneChangeDirection.right) is False
+    assert gate.block_reason == "direction_conflict"
+
+  def test_same_direction_allows(self):
+    gate = self._navi_gate(direction_enabled=True)
+    navi = _navi(turn_type=13, turn_distance=400)  # 右转 400m
+    assert gate.update(FakeSM(navi), LaneChangeDirection.right) is True
+
+  def test_next_guidance_conflict_blocks(self):
+    gate = self._navi_gate(direction_enabled=True)
+    # guidanceCurrent 无转向，guidanceNext 左转 350m → 拨右杆阻断
+    navi = _navi(turn_type=-1, next_turn_type=12, next_turn_distance=350)
+    assert gate.update(FakeSM(navi), LaneChangeDirection.right) is False
+    assert gate.block_reason == "direction_conflict"
+
+  def test_distance_boundary_and_invalid_distance(self):
+    gate = self._navi_gate(direction_enabled=True)
+    assert gate.update(FakeSM(_navi(turn_type=12, turn_distance=500)), LaneChangeDirection.right) is True
+    assert gate.update(FakeSM(_navi(turn_type=12, turn_distance=0)), LaneChangeDirection.right) is True
+
+  def test_unknown_uturn_arrive_types_allow(self):
+    gate = self._navi_gate(direction_enabled=True)
+    assert gate.update(FakeSM(_navi(turn_type=14, turn_distance=400)), LaneChangeDirection.right) is True   # uturn → '' fail-open
+    assert gate.update(FakeSM(_navi(turn_type=201, turn_distance=400)), LaneChangeDirection.right) is True  # arrive → ''
+    assert gate.update(FakeSM(_navi(turn_type=999, turn_distance=400)), LaneChangeDirection.right) is True  # 未知编码
+
+  def test_no_blinker_direction_skips_layer(self):
+    gate = self._navi_gate(direction_enabled=True)
+    assert gate.update(FakeSM(_navi(turn_type=12, turn_distance=400))) is True  # 未传方向：只跑其余抑制层
 
 
 class TestBlockTurnTypesConsistency:

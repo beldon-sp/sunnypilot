@@ -160,6 +160,9 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"NaviGuidedLaneChangeEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},  // 拨杆变道的导航许可闸门（carrotmate，fail-open）
     {"NaviLaneChangeTurnDistance", {PERSISTENT | BACKUP, INT, "300"}},  // meters, 临近转向/匝道抑制距离
     {"NaviLaneChangeCrossroadDistance", {PERSISTENT | BACKUP, INT, "150"}},  // meters, 临近路口抑制距离
+    {"NaviLaneChangeSignalDistance", {PERSISTENT | BACKUP, INT, "150"}},  // meters, crossroad 缺席时 trafficSignal 兜底抑制距离
+    {"NaviLaneChangeDirectionEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},  // 拨杆方向与导航转向方向冲突时抑制变道发起
+    {"NaviLaneChangeDirectionDistance", {PERSISTENT | BACKUP, INT, "500"}},  // meters, 方向冲突抑制窗口
     {"BlinkerLateralReengageDelay", {PERSISTENT | BACKUP, INT, "0"}},  // seconds
     {"BlinkerMinLateralControlSpeed", {PERSISTENT | BACKUP, INT, "20"}},  // MPH or km/h
     {"BlinkerPauseLateralControl", {PERSISTENT | BACKUP, INT, "0"}},
