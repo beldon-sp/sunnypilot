@@ -13,6 +13,7 @@ from openpilot.sunnypilot.selfdrive.selfdrived.events_base import EventsBase, Pr
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import PCM_LONG_REQUIRED_MAX_SET_SPEED, CONFIRM_SPEED_THRESHOLD
 from openpilot.common.hardware import HARDWARE
 from openpilot.system.ui.lib.multilang import tr
+from openpilot.selfdrive.carrot.navi_alerts import turn_text
 
 AlertSize = log.SelfdriveState.AlertSize
 AlertStatus = log.SelfdriveState.AlertStatus
@@ -38,6 +39,33 @@ def speed_limit_adjust_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.
     "",
     AlertStatus.normal, AlertSize.small,
     Priority.LOW, VisualAlert.none, AudibleAlert.none, 4.)
+
+
+def carrot_traffic_signal_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
+  distance = sm['carrotNavi'].trafficSignal.distanceM
+  return Alert(
+    tr("Red light ahead, {} m").format(distance),
+    "",
+    AlertStatus.normal, AlertSize.small,
+    Priority.LOW, VisualAlert.none, AudibleAlert.none, 0.4)
+
+
+def carrot_nav_turn_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
+  guidance = sm['carrotNavi'].guidanceCurrent
+  text = turn_text(guidance.turnType)
+  return Alert(
+    tr("In {} m, {}").format(guidance.distanceM, text),
+    "",
+    AlertStatus.normal, AlertSize.small,
+    Priority.LOW, VisualAlert.none, AudibleAlert.none, 0.4)
+
+
+def carrot_nav_off_route_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
+  return Alert(
+    tr("Off route"),
+    tr("Replanning, guided lane changes released"),
+    AlertStatus.userPrompt, AlertSize.mid,
+    Priority.MID, VisualAlert.none, AudibleAlert.none, 0.4)
 
 
 def speed_limit_pre_active_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
@@ -257,5 +285,19 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "",
       AlertStatus.normal, AlertSize.small,
       Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 2.),
+  },
+
+  # carrot 导航预警（carrotmate）：文案回调渲染时从 sm['carrotNavi'] 现算，
+  # 纯视觉（AudibleAlert.none），不改控制 —— 见 selfdrive/carrot/navi_alerts.py
+  EventNameSP.carrotTrafficSignal: {
+    ET.PERMANENT: carrot_traffic_signal_alert,
+  },
+
+  EventNameSP.carrotNavTurn: {
+    ET.PERMANENT: carrot_nav_turn_alert,
+  },
+
+  EventNameSP.carrotNavOffRoute: {
+    ET.PERMANENT: carrot_nav_off_route_alert,
   },
 }

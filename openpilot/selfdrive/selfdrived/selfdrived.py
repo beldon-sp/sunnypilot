@@ -17,6 +17,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.common.gps import get_gps_location_service
 
 from openpilot.selfdrive.car.car_events import CarEvents
+from openpilot.selfdrive.carrot.navi_alerts import NaviAlertTracker
 from openpilot.selfdrive.controls.lib.assist_less_lane_change import get_assist_less_lane_change
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.selfdrived.events import Events, ET
@@ -122,7 +123,7 @@ class SelfdriveD:
                                    'carOutput', 'driverMonitoringState', 'longitudinalPlan', 'deviceMotion', 'lateralDelay',
                                    'managerState', 'vehicleParameters', 'radarState', 'lateralTorqueParameters',
                                    'controlsState', 'carControl', 'driverAssistance', 'alertDebug', 'userBookmark',
-                                   'lateralManeuverPlan', 'modelDataV2SP', 'longitudinalPlanSP'] + \
+                                   'lateralManeuverPlan', 'modelDataV2SP', 'longitudinalPlanSP', 'carrotNavi'] + \
                                    self.camera_packets + self.sensor_packets + self.gps_packets,
                                   ignore_alive=ignore, ignore_avg_freq=ignore,
                                   ignore_valid=ignore, frequency=int(1/DT_CTRL))
@@ -141,6 +142,8 @@ class SelfdriveD:
     self.CS_prev = car.CarState.new_message()
     self.AM = AlertManager()
     self.events = Events()
+    # carrot 导航预警追踪器（selfdrive/carrot/navi_alerts.py）
+    self.carrot_nav_alerts = NaviAlertTracker()
 
     # BYD M1 watchdog state (see BYD_LONG_FW_BLOCKED_PER_SEC above)
     self.byd_long_fw_blocked = False
@@ -304,6 +307,11 @@ class SelfdriveD:
 
       car_events_sp = self.car_events_sp.update(CS, self.events).to_msg()
       self.events_sp.add_from_msg(car_events_sp)
+
+      # carrot 导航预警（红绿灯/转向预告/偏航）：carrotNavi 在线时至多注入一条
+      self.carrot_nav_alerts.update(self.sm)
+      if self.carrot_nav_alerts.event is not None:
+        self.events_sp.add(self.carrot_nav_alerts.event)
 
       if self.CP.notCar:
         # wait for everything to init first

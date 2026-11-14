@@ -361,6 +361,9 @@ struct OnroadEventSP @0xda96579883444c35 {
     e2eChime @23;
     laneChangeRoadEdge @24;
     bigModelReady @25;
+    carrotTrafficSignal @26;  # 前方红灯接近预警（carrotmate trafficSignal 流）
+    carrotNavTurn @27;        # 导航转向预告（carrotmate guidanceCurrent 流）
+    carrotNavOffRoute @28;    # 已偏航提示（carrotmate navigationStatus 流）
   }
 }
 
