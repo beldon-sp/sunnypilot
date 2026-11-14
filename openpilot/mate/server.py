@@ -299,7 +299,8 @@ async def param_set_handler(request: web.Request) -> web.Response:
 # - 全部命令 offroad_only；需确认的命令走服务端确认闭环：POST /command 先回
 #   pending + broadcast confirm kind，客户端 POST /command/confirm 回传，超时
 #   默认 deny。
-# - 鉴权用 require_sensitive_auth：token 未配置直接 403，不复用「未配置即放行」。
+# - 鉴权用 require_sensitive_auth：与 check_auth 同口径——MateToken 未配置即放行
+#   （车内私有网络自用场景），已配置则强制比对（401）。
 COMMANDS: dict[str, dict] = {
   # backup_manager（sunnypilot/sunnylink/backups/manager.py:253）轮询该 param 触发备份
   "trigger_backup": {"title": "创建参数备份", "confirm": False, "offroad_only": True},
@@ -319,10 +320,11 @@ _pending_confirms: dict[str, dict] = {}  # id -> {command, deadline, ts, title}
 
 
 def require_sensitive_auth(request: web.Request) -> None:
-  """v6 敏感端点鉴权：token 未配置直接 403（先配对再谈控制），
-  已配置则走常规比对。与 check_auth 的「未配置即放行」语义刻意不同。"""
+  """v6 敏感端点鉴权：与 check_auth 同口径——token 未配置即放行（车内私有
+  网络自用，设备上不配 MateToken 即可全程免 token）；已配置则强制比对。
+  想上锁的用户只需设置 MateToken，无需改代码。"""
   if not read_token():
-    raise web.HTTPForbidden(text='{"error":"token not configured; set MateToken first"}', content_type="application/json")
+    return
   if not auth_ok(request):
     raise web.HTTPUnauthorized(text='{"error":"invalid token"}', content_type="application/json")
 

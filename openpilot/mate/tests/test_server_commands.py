@@ -1,6 +1,7 @@
 """mate server v6 命令通道与确认闭环测试（#2 /command + /command/confirm）。
 
-- require_sensitive_auth：token 未配置 403（先配对），已配置校验比对（401/放行）
+- require_sensitive_auth：与 check_auth 同口径——token 未配置即放行（车内自用），
+  已配置则校验比对（401）
 - 命令白名单严格收敛；offroad 门控（onroad 409 / 状态未知 503）
 - 确认闭环：pending → confirm kind broadcast → approve 执行 / deny / 超时默认 deny
 - clear_logs 执行器：只删过期文件，新文件保留
@@ -62,18 +63,19 @@ async def _post(client, path, json_body, token="secret"):
 
 
 class TestCommandAuth:
-  def test_token_unset_403(self, hub_offroad, monkeypatch):
+  def test_token_unset_allowed(self, hub_offroad, monkeypatch):
+    # 未配置 MateToken 即放行（车内私有网络自用）：鉴权层穿透到业务校验，
+    # 用无副作用的业务错误（400/404）证明没有卡在鉴权层
     monkeypatch.setattr(server, "read_token", lambda: None)
 
     async def body():
       client = TestClient(TestServer(_app()))
       await client.start_server()
       try:
-        resp = await _post(client, "/command", {"command": "trigger_backup"}, token=None)
-        assert resp.status == 403
-        # 确认回传端点同样强制
-        resp = await _post(client, "/command/confirm", {"id": "x", "approve": True}, token=None)
-        assert resp.status == 403
+        resp = await _post(client, "/command", {"command": "no_such_command"}, token=None)
+        assert resp.status == 400  # 到达命令白名单校验 = 鉴权放行
+        resp = await _post(client, "/command/confirm", {"id": "no_such_id", "approve": True}, token=None)
+        assert resp.status == 404  # 到达确认 id 查找 = 鉴权放行
       finally:
         await client.close()
 
