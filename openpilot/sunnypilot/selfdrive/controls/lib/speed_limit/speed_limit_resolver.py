@@ -13,7 +13,11 @@ from openpilot.common.gps import get_gps_location_service
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD, get_sanitize_int_param
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import LIMIT_MAX_MAP_DATA_AGE, LIMIT_ADAPT_ACC
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import (
+  LIMIT_MAX_MAP_DATA_AGE,
+  LIMIT_MAX_CARROT_NAVI_AGE,
+  LIMIT_ADAPT_ACC,
+)
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Policy, OffsetType
 
 SpeedLimitSource = custom.LongitudinalPlanSP.SpeedLimit.Source
@@ -49,11 +53,14 @@ class SpeedLimitResolver:
       self.params
     )
     self._policy_to_sources_map = {
+      # carrot = carrotmate 导航限速（高德），质量介于车机 TSR 与离线 OSM 之间：
+      # 归入 map 类策略并在 map 之前取用（导航中新鲜且更准，OSM 兜底）；
+      # 巡航期 carrotNavi 不发限速（spec 约束），自然回落到其他源。
       Policy.car_state_only: [SpeedLimitSource.car],
-      Policy.map_data_only: [SpeedLimitSource.map],
-      Policy.car_state_priority: [SpeedLimitSource.car, SpeedLimitSource.map],
-      Policy.map_data_priority: [SpeedLimitSource.map, SpeedLimitSource.car],
-      Policy.combined: [SpeedLimitSource.car, SpeedLimitSource.map],
+      Policy.map_data_only: [SpeedLimitSource.carrot, SpeedLimitSource.map],
+      Policy.car_state_priority: [SpeedLimitSource.car, SpeedLimitSource.carrot, SpeedLimitSource.map],
+      Policy.map_data_priority: [SpeedLimitSource.carrot, SpeedLimitSource.map, SpeedLimitSource.car],
+      Policy.combined: [SpeedLimitSource.car, SpeedLimitSource.map, SpeedLimitSource.carrot],
     }
     self.source = SpeedLimitSource.none
     for source in ALL_SOURCES:
@@ -119,6 +126,26 @@ class SpeedLimitResolver:
     self._reset_limit_sources(SpeedLimitSource.map)
     self._process_map_data(sm)
 
+  def _get_from_carrot_navi(self, sm: messaging.SubMaster) -> None:
+    """carrotNavi.speed.roadLimitKph → carrot 源（#3）。
+
+    新鲜度口径与 navi_lane_change_gate 一致：alive/valid + 1.5s 无新帧即视为
+    carrotmate 掉线；connected 双保险防 publisher 心跳假活。数据无效一律
+    留 0（fail-open，回落到 policy 链上的下一个源）。
+    """
+    self._reset_limit_sources(SpeedLimitSource.carrot)
+    if 'carrotNavi' not in sm.seen or not (sm.seen['carrotNavi'] and sm.alive['carrotNavi'] and sm.valid['carrotNavi']):
+      return
+    if time.monotonic() - sm.recv_time['carrotNavi'] > LIMIT_MAX_CARROT_NAVI_AGE:
+      return
+    navi = sm['carrotNavi']
+    if not navi.connected:
+      return
+    speed = navi.speed
+    if speed.meta.present and speed.roadLimitValid and 0 < speed.roadLimitKph <= 200:
+      self.limit_solutions[SpeedLimitSource.carrot] = speed.roadLimitKph * CV.KPH_TO_MS
+      self.distance_solutions[SpeedLimitSource.carrot] = 0.
+
   def _process_map_data(self, sm: messaging.SubMaster) -> None:
     gps_data = sm[self._gps_location_service]
     map_data = sm['liveMapDataSP']
@@ -171,6 +198,7 @@ class SpeedLimitResolver:
     """Get limit solutions from each data source"""
     self._get_from_car_state(sm)
     self._get_from_map_data(sm)
+    self._get_from_carrot_navi(sm)
 
     source = self._get_source_solution_according_to_policy()
     speed_limit = self.limit_solutions[source] if source else 0.

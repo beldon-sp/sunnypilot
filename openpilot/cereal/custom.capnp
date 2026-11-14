@@ -289,6 +289,7 @@ struct LongitudinalPlanSP @0xf35cc4560bbf6ec2 {
       none @0;
       car @1;
       map @2;
+      carrot @3;  # carrotmate 导航限速（carrotNavi.speed.roadLimitKph，仅导航中有效）
     }
 
     enum AssistState {

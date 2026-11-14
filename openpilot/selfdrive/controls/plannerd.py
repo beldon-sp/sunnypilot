@@ -24,12 +24,14 @@ def main():
 
   gps_location_service = get_gps_location_service(params)
   ignore_services = ["liveMapDataSP", "carStateSP", "selfdriveStateSP", gps_location_service]
+  # carrotNavi 是 2 Hz 常规服务（carrotmate 导航数据）：不在 ignore 列表，
+  # 让 alive/valid 真实反映 carrotmate 在线状态，供 SLC carrot 源新鲜度判定
 
   ldw = LaneDepartureWarning()
   longitudinal_planner = LongitudinalPlanner(CP, CP_SP)
   pm = messaging.PubMaster(['longitudinalPlan', 'driverAssistance', 'longitudinalPlanSP'])
   sm = messaging.SubMaster(['carControl', 'carState', 'controlsState', 'radarState', 'modelV2', 'selfdriveState',
-                            'liveMapDataSP', 'carStateSP', 'selfdriveStateSP', 'carrotMan', gps_location_service],
+                            'liveMapDataSP', 'carStateSP', 'selfdriveStateSP', 'carrotMan', 'carrotNavi', gps_location_service],
                            poll='modelV2', ignore_alive=ignore_services, ignore_avg_freq=ignore_services, ignore_valid=ignore_services)
 
   while True:

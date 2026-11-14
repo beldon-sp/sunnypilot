@@ -10,7 +10,7 @@ import time
 from openpilot.common.parameterized import parameterized
 
 from openpilot.cereal import custom
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import LIMIT_MAX_MAP_DATA_AGE
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import LIMIT_MAX_MAP_DATA_AGE, LIMIT_MAX_CARROT_NAVI_AGE
 
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver import SpeedLimitResolver, ALL_SOURCES
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Policy
@@ -24,6 +24,28 @@ def create_mock(properties, mocker):
   for _property, value in properties.items():
     setattr(mock, _property, value)
   return mock
+
+
+def setup_carrot_sm_mock(mocker, limit_kph=80.0, *, seen=True, alive=True, valid=True,
+                         recv_age=0.0, connected=True, present=True, road_limit_valid=True):
+  """carrotNavi SubMaster 契约替身：新鲜度/连接/数据有效性逐项可控。
+
+  复用 setup_sm_mock 提供其余服务（resolver.update 会同时读 carStateSP /
+  liveMapDataSP / gpsLocation），仅替换 carrotNavi 键与新鲜度元数据。
+  """
+  navi = custom.CarrotNaviState.new_message()
+  navi.connected = connected
+  navi.speed.meta.present = present
+  navi.speed.roadLimitValid = road_limit_valid
+  navi.speed.roadLimitKph = int(limit_kph)
+  sm_mock = setup_sm_mock(mocker)
+  base_getitem = sm_mock.__getitem__.side_effect
+  sm_mock.__getitem__.side_effect = lambda key: navi if key == 'carrotNavi' else base_getitem(key)
+  sm_mock.seen = {'carrotNavi': seen}
+  sm_mock.alive = {'carrotNavi': alive}
+  sm_mock.valid = {'carrotNavi': valid}
+  sm_mock.recv_time = {'carrotNavi': time.monotonic() - recv_age}
+  return sm_mock
 
 
 def setup_sm_mock(mocker):
@@ -145,3 +167,62 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
     resolver._get_from_map_data(sm_mock)
     assert resolver.limit_solutions[SpeedLimitSource.map] == 0.
     assert resolver.distance_solutions[SpeedLimitSource.map] == 0.
+
+
+class TestCarrotNaviSource(OpenpilotTestCase):
+  """carrot 源（#3）：carrotNavi.speed.roadLimitKph 接入 SLC，新鲜度 fail-open。"""
+
+  def test_fresh_carrot_limit_resolves(self, mocker):
+    # map_data_only 策略：carrot 新鲜有效 → carrot 优先于 OSM map
+    resolver = SpeedLimitResolver()
+    resolver.policy = Policy.map_data_only
+    sm_mock = setup_carrot_sm_mock(mocker, limit_kph=80.0)
+    resolver.update(20.0, sm_mock)
+    assert resolver.source == SpeedLimitSource.carrot
+    assert resolver.speed_limit == 80.0 * (1 / 3.6)
+    assert resolver.distance_solutions[SpeedLimitSource.carrot] == 0.
+
+  def test_stale_carrot_falls_back_to_map(self, mocker):
+    # carrotNavi 1.5s 无新帧（掉线）→ carrot 置 0，map_data_only 回落 OSM map
+    resolver = SpeedLimitResolver()
+    resolver.policy = Policy.map_data_only
+    sm_mock = setup_carrot_sm_mock(mocker, recv_age=LIMIT_MAX_CARROT_NAVI_AGE + 0.1)
+    resolver.update(20.0, sm_mock)
+    assert resolver.limit_solutions[SpeedLimitSource.carrot] == 0.
+    assert resolver.source == SpeedLimitSource.map
+
+  def test_disconnected_carrot_ignored(self, mocker):
+    # carrotmate 断连但 publisher 心跳仍发：connected 双保险拦截
+    resolver = SpeedLimitResolver()
+    sm_mock = setup_carrot_sm_mock(mocker, connected=False)
+    resolver._get_from_carrot_navi(sm_mock)
+    assert resolver.limit_solutions[SpeedLimitSource.carrot] == 0.
+
+  @parameterized.expand([
+    ("not_present", dict(present=False)),
+    ("limit_invalid", dict(road_limit_valid=False)),
+    ("limit_zero", dict(limit_kph=0)),
+    ("limit_over_max", dict(limit_kph=250)),
+  ], names=["case", "kwargs"])
+  def test_invalid_carrot_data_ignored(self, case, kwargs, mocker):
+    resolver = SpeedLimitResolver()
+    sm_mock = setup_carrot_sm_mock(mocker, **kwargs)
+    resolver._get_from_carrot_navi(sm_mock)
+    assert resolver.limit_solutions[SpeedLimitSource.carrot] == 0.
+
+  def test_car_state_only_ignores_carrot(self, mocker):
+    # car_state_only 策略不吃 carrot 源（尊重用户策略意图）
+    resolver = SpeedLimitResolver()
+    resolver.policy = Policy.car_state_only
+    sm_mock = setup_carrot_sm_mock(mocker, limit_kph=80.0)
+    sm_mock['carStateSP'].speedLimit = 60.0
+    resolver.update(20.0, sm_mock)
+    assert resolver.source == SpeedLimitSource.car
+    assert resolver.speed_limit == 60.0
+
+  def test_carrot_absent_service_ignored(self, mocker):
+    # plannerd 未收到 carrotNavi（服务从未上线）→ fail-open
+    resolver = SpeedLimitResolver()
+    sm_mock = setup_carrot_sm_mock(mocker, seen=False, alive=False, valid=False)
+    resolver._get_from_carrot_navi(sm_mock)
+    assert resolver.limit_solutions[SpeedLimitSource.carrot] == 0.
