@@ -1,6 +1,7 @@
 import json
 import math
 import platform
+import time
 
 import openpilot.cereal.messaging as messaging
 from openpilot.cereal import custom
@@ -11,6 +12,7 @@ from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD
 from openpilot.sunnypilot.navd.helpers import Coordinate
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control import MIN_V
+from openpilot.selfdrive.carrot.route_curvature import RouteCurvaturePreview, CARROT_NAVI_TIMEOUT as CARROT_NAVI_PREVIEW_TIMEOUT
 
 MapState = VisionState = custom.LongitudinalPlanSP.SmartCruiseControl.MapState
 
@@ -90,6 +92,11 @@ class SmartCruiseControlMap:
     self.last_position = Coordinate(0.0, 0.0)
     self.target_velocities = velocities_from_param("MapTargetVelocities", self.mem_params) or []
 
+    # carrot polyline 曲率预览（#4，CarrotRouteCurvatureEnabled 默认关）：
+    # carrotmate 导航中用高德 polyline 现算弯道限速候选，掉线回落 OSM param
+    self.carrot_enabled = self.params.get_bool("CarrotRouteCurvatureEnabled")
+    self.carrot_preview = RouteCurvaturePreview()
+
   def get_v_target_from_control(self) -> float:
     if self.is_active:
       return max(self.v_target, MIN_V)
@@ -102,6 +109,27 @@ class SmartCruiseControlMap:
   def update_params(self):
     if self.frame % int(PARAMS_UPDATE_PERIOD / DT_MDL) == 0:
       self.enabled = self.params.get_bool("SmartCruiseControlMap")
+      self.carrot_enabled = self.params.get_bool("CarrotRouteCurvatureEnabled")
+
+  def _carrot_navi_fresh(self, sm: messaging.SubMaster) -> bool:
+    """carrotNavi 新鲜度口径与 navi_lane_change_gate / SLC carrot 源一致。"""
+    service = 'carrotNavi'
+    if service not in sm.seen or not (sm.seen[service] and sm.alive[service] and sm.valid[service]):
+      return False
+    if time.monotonic() - sm.recv_time[service] > CARROT_NAVI_PREVIEW_TIMEOUT:
+      return False
+    return bool(sm[service].connected)
+
+  def _update_target_velocities(self, sm: messaging.SubMaster) -> None:
+    """候选点集来源仲裁：carrot polyline 曲率预览优先，OSM param 兜底。"""
+    if self.carrot_enabled and self._carrot_navi_fresh(sm):
+      self.carrot_preview.update(sm['carrotNavi'])
+      if self.carrot_preview.valid:
+        self.target_velocities = self.carrot_preview.target_velocities
+        return
+    else:
+      self.carrot_preview.mark_stale()
+    self.target_velocities = velocities_from_param("MapTargetVelocities", self.mem_params) or []
 
   def update_calculations(self, sm: messaging.SubMaster) -> None:
     gps = sm[self.gps_location_service]
@@ -109,7 +137,7 @@ class SmartCruiseControlMap:
     lat = self.last_position.latitude
     lon = self.last_position.longitude
 
-    self.target_velocities = velocities_from_param("MapTargetVelocities", self.mem_params) or []
+    self._update_target_velocities(sm)
 
     if self.last_position is None or self.target_velocities is None:
       return

@@ -73,3 +73,60 @@ class TestSmartCruiseControlMap(OpenpilotTestCase):
     self.assertAlmostEqual(self.scc_m.v_target, 24.0, delta=24.0 * 1e-6)
 
   # TODO-SP: mock data from modelV2 to test other states
+
+  # ── carrot polyline 曲率预览（#4）──
+
+  def _carrot_sm(self, polyline, sequence=1, fresh=True, connected=True, enabled=True):
+    """carrotNavi + gpsLocation 的最小替身。"""
+    navi = SimpleNamespace(
+      connected=connected,
+      route=SimpleNamespace(
+        meta=SimpleNamespace(present=True),
+        sequence=sequence,
+        polyline=[SimpleNamespace(latitude=la, longitude=lo) for la, lo in polyline],
+      ),
+    )
+    sm = MagicMock()
+    sm.seen = {'carrotNavi': True}
+    sm.alive = {'carrotNavi': fresh}
+    sm.valid = {'carrotNavi': fresh}
+    sm.recv_time = {'carrotNavi': __import__('time').monotonic() - (0.0 if fresh else 10.0)}
+    sm.__getitem__.side_effect = lambda key: navi if key == 'carrotNavi' else SimpleNamespace(latitude=0.0, longitude=0.0)
+    return sm
+
+  def test_carrot_preview_used_when_enabled(self):
+    # 开关开 + carrotNavi 新鲜 → 用 polyline 曲率候选（含直角弯 → 出现低速点）
+    self.params.put_bool("CarrotRouteCurvatureEnabled", True, block=True)
+    self.scc_m.carrot_enabled = True
+    corner = ([(i * 0.0009, 0.0) for i in range(5)] +
+              [(0.0036, i * 0.0009) for i in range(1, 5)])
+    self.scc_m._update_target_velocities(self._carrot_sm(corner))
+    assert self.scc_m.target_velocities
+    assert any(p['velocity'] < 30.0 for p in self.scc_m.target_velocities)
+
+  def test_carrot_preview_fallback_when_disabled(self):
+    # 开关关（默认）→ 走 OSM MapTargetVelocities param
+    self.params.put_bool("CarrotRouteCurvatureEnabled", False, block=True)
+    self.scc_m.carrot_enabled = False
+    corner = ([(i * 0.0009, 0.0) for i in range(5)] +
+              [(0.0036, i * 0.0009) for i in range(1, 5)])
+    self.scc_m._update_target_velocities(self._carrot_sm(corner))
+    assert self.scc_m.target_velocities == []  # param 为空 {} → []
+
+  def test_carrot_preview_fallback_when_stale(self):
+    # carrotNavi 1.5s 无新帧（掉线）→ 回落 OSM param（fail-open）
+    self.params.put_bool("CarrotRouteCurvatureEnabled", True, block=True)
+    self.scc_m.carrot_enabled = True
+    corner = ([(i * 0.0009, 0.0) for i in range(5)] +
+              [(0.0036, i * 0.0009) for i in range(1, 5)])
+    self.scc_m._update_target_velocities(self._carrot_sm(corner, fresh=False))
+    assert self.scc_m.target_velocities == []
+    assert self.scc_m.carrot_preview.valid is False
+
+  def test_carrot_preview_fallback_when_disconnected(self):
+    self.params.put_bool("CarrotRouteCurvatureEnabled", True, block=True)
+    self.scc_m.carrot_enabled = True
+    corner = ([(i * 0.0009, 0.0) for i in range(5)] +
+              [(0.0036, i * 0.0009) for i in range(1, 5)])
+    self.scc_m._update_target_velocities(self._carrot_sm(corner, connected=False))
+    assert self.scc_m.target_velocities == []

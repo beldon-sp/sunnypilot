@@ -163,6 +163,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"NaviLaneChangeSignalDistance", {PERSISTENT | BACKUP, INT, "150"}},  // meters, crossroad 缺席时 trafficSignal 兜底抑制距离
     {"NaviLaneChangeDirectionEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},  // 拨杆方向与导航转向方向冲突时抑制变道发起
     {"NaviLaneChangeDirectionDistance", {PERSISTENT | BACKUP, INT, "500"}},  // meters, 方向冲突抑制窗口
+    {"CarrotRouteCurvatureEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},  // carrotmate polyline 曲率前瞻接入 SCC-M（#4，默认关）
     {"BlinkerLateralReengageDelay", {PERSISTENT | BACKUP, INT, "0"}},  // seconds
     {"BlinkerMinLateralControlSpeed", {PERSISTENT | BACKUP, INT, "20"}},  // MPH or km/h
     {"BlinkerPauseLateralControl", {PERSISTENT | BACKUP, INT, "0"}},
