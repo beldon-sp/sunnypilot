@@ -120,6 +120,115 @@ def check_auth(request: web.BaseRequest) -> None:
     raise web.HTTPUnauthorized(text='{"error":"invalid token"}', content_type="application/json")
 
 
+# ── params 读写（#6 双向控制：搭子调设备参数）──────────────────────────
+# 读：白名单内任意 key；写：白名单 + MateToken 鉴权（设了 token 才验，同 WS/SSE 口径）。
+# 响应形状对齐 CarrotPilot 7000 carrot_server 契约（{ok, values} / {ok, name, value}），
+# carrotmate 端 CarrotParamClient 可按同一解析逻辑对接任一端口。
+PARAMS_WHITELIST: dict[str, str] = {
+  # 导航变道闸门（carrotmate 上行，fail-open）
+  "NaviGuidedLaneChangeEnabled": "bool",
+  "NaviLaneChangeDirectionEnabled": "bool",   # 拨杆方向冲突抑制（默认关）
+  "NaviLaneChangeTurnDistance": "int",        # meters
+  "NaviLaneChangeCrossroadDistance": "int",   # meters
+  "NaviLaneChangeSignalDistance": "int",      # meters, crossroad 缺席时红绿灯兜底
+  "NaviLaneChangeDirectionDistance": "int",   # meters, 方向冲突窗口
+  # 匝道/弯道曲率预减速（SCC-M 数据源仲裁，默认关）
+  "CarrotRouteCurvatureEnabled": "bool",
+  # 兼容既有通道（cem 实验模式开关）
+  "ExperimentalMode": "bool",
+}
+PARAMS_DISTANCE_RANGE = (0, 2000)  # meters，距离类参数统一界
+
+
+def _param_readable(name: str) -> bool:
+  return name in PARAMS_WHITELIST
+
+
+def _param_coerce(name: str, value) -> object:
+  """按白名单类型归一写入口的值；类型不符抛 ValueError。
+
+  BOOL 键宽容归一（真布尔 / 1|0 / "true"|"false"），兼容 carrotmate 现有
+  value:1|0 的 carrot 7000 请求形态与 mate 的 value:true|false 形态。
+  """
+  kind = PARAMS_WHITELIST[name]
+  if kind == "bool":
+    if isinstance(value, bool):
+      return value
+    if isinstance(value, int) and value in (0, 1):
+      return bool(value)
+    if isinstance(value, str) and value.strip().lower() in ("true", "1"):
+      return True
+    if isinstance(value, str) and value.strip().lower() in ("false", "0"):
+      return False
+    raise ValueError(f"{name} 需要 bool")
+  if kind == "int":
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+      raise ValueError(f"{name} 需要 int")
+    iv = int(value)
+    if iv < PARAMS_DISTANCE_RANGE[0] or iv > PARAMS_DISTANCE_RANGE[1]:
+      raise ValueError(f"{name} 超出 {PARAMS_DISTANCE_RANGE}")
+    return iv
+  raise ValueError(f"{name} 类型不支持写入")
+
+
+def _param_out(name: str, raw) -> object:
+  """读出口归一：BOOL 键回真布尔，INT 键回整数，异常路径回 None。"""
+  kind = PARAMS_WHITELIST[name]
+  try:
+    if kind == "bool":
+      if isinstance(raw, (bytes, bytearray)):
+        return raw.decode("utf-8", "ignore").strip() == "1"
+      return bool(raw)
+    if kind == "int":
+      return int(raw)
+  except (TypeError, ValueError):
+    return None
+  return raw
+
+
+async def params_read_handler(request: web.Request) -> web.Response:
+  names = [n for n in (request.query.get("names") or "").split(",") if n]
+  if not names:
+    return web.json_response({"ok": False, "error": "names required"}, status=400)
+  unknown = [n for n in names if not _param_readable(n)]
+  if unknown:
+    return web.json_response({"ok": False, "error": f"keys not allowed: {','.join(unknown)}"}, status=403)
+  params = Params()
+  values = {}
+  for name in names:
+    try:
+      raw = params.get(name)
+    except Exception:
+      raw = None
+    values[name] = _param_out(name, raw)
+  return web.json_response({"ok": True, "values": values})
+
+
+async def param_set_handler(request: web.Request) -> web.Response:
+  check_auth(request)
+  try:
+    body = await request.json()
+  except Exception:
+    return web.json_response({"ok": False, "error": "body must be json"}, status=400)
+  name, value = body.get("name"), body.get("value")
+  if not _param_readable(name):
+    return web.json_response({"ok": False, "error": f"key not allowed: {name}"}, status=403)
+  try:
+    coerced = _param_coerce(name, value)
+  except ValueError as e:
+    return web.json_response({"ok": False, "error": str(e)}, status=400)
+  try:
+    Params().put(name, coerced, block=True)
+  except Exception as e:
+    return web.json_response({"ok": False, "error": f"param put failed: {e}"}, status=500)
+  # 写后立即读回，回显设备侧实际值（客户端读回确认以此对账）
+  try:
+    echo = _param_out(name, Params().get(name))
+  except Exception:
+    echo = coerced
+  return web.json_response({"ok": True, "name": name, "value": echo})
+
+
 class Hub:
   """poller 线程 -> 事件循环 -> 各客户端队列的广播中心，并维护最新状态快照。"""
 
@@ -340,6 +449,8 @@ def main():
     web.get("/state", state_handler),
     web.get("/health", health_handler),
     web.get("/sounds/{filename}", sounds_handler),
+    web.get("/params", params_read_handler),
+    web.post("/param_set", param_set_handler),
   ])
   cloudlog.event("mate listening", port=PORT)
   web.run_app(app, host="0.0.0.0", port=PORT, print=None)
