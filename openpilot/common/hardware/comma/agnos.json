@@ -56,9 +56,9 @@
   },
   {
     "name": "boot",
-    "url": "https://files.firestar.link/x/551127s1r1at/boot30.img.xz",
+    "url": "https://cnb.cool/beldon-op/agnos-mirror/-/git/raw/19.8.1/boot30.img.xz",
     "fallback_urls": [
-      "https://files-east.firestar.link/x/k6yo892sdmpu/boot30.img.xz"
+      "https://files.firestar.link/x/551127s1r1at/boot30.img.xz"
     ],
     "hash": "ac3863c3834a94986647eb61d21796e7550095a18e0119c9102cab06ce390417",
     "hash_raw": "ac3863c3834a94986647eb61d21796e7550095a18e0119c9102cab06ce390417",
@@ -70,9 +70,9 @@
   },
   {
     "name": "system",
-    "url": "https://files.firestar.link/x/i8ndxrnax3j5/system30.img.xz",
+    "url": "https://cnb.cool/beldon-op/agnos-mirror/-/git/raw/19.8.1/system30.img.xz",
     "fallback_urls": [
-      "https://files-east.firestar.link/x/5xg5c05pefck/system30.img.xz"
+      "https://files.firestar.link/x/i8ndxrnax3j5/system30.img.xz"
     ],
     "hash": "9c753bdd90e6079b2cf525659d7523d0ebc0a375bd61e61cca628f1db3832cfd",
     "hash_raw": "98e15de07c39a19b5fa17c96a67e66d4362f9ebaf7827b640f4127e3b6417da8",

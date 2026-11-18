@@ -14,13 +14,54 @@ SPARSE_CHUNK_FMT = struct.Struct('H2xI4x')
 
 AGNOS_MANIFEST_FILE = "openpilot/system/hardware/comma/agnos.json"
 
+LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
+LFS_HEADERS = {'Accept': 'application/vnd.git-lfs+json', 'Content-Type': 'application/vnd.git-lfs+json'}
+
+
+def resolve_lfs_pointer(url: str, pointer: bytes) -> str:
+  # Some mirrors (e.g. cnb.cool) serve git-lfs pointer files at their raw URLs.
+  # Negotiate a temporary download href via the anonymous LFS batch API.
+  oid, size = None, None
+  for line in pointer.decode('utf-8', 'replace').splitlines():
+    if line.startswith('oid sha256:'):
+      oid = line.split(':', 1)[1].strip()
+    elif line.startswith('size '):
+      size = int(line.split()[1])
+  if not oid or size is None:
+    raise Exception(f"Invalid LFS pointer at {url}")
+
+  base_url = url.split('/-/git/raw/')[0]  # e.g. https://cnb.cool/group/repo
+  scheme, rest = base_url.split('://', 1)
+  host, repo_path = rest.split('/', 1)
+  batch_url = f"{scheme}://{host}/{repo_path}.git/info/lfs/objects/batch"
+
+  r = requests.post(batch_url, json={
+    'operation': 'download',
+    'objects': [{'oid': oid, 'size': size}],
+    'transfer': ['basic'],
+  }, headers=LFS_HEADERS, timeout=60)
+  r.raise_for_status()
+  obj = r.json()['objects'][0]
+  if 'error' in obj:
+    raise Exception(f"LFS batch error: {obj['error'].get('message', obj['error'])}")
+  return obj['actions']['download']['href']
+
 
 class StreamingDecompressor:
   def __init__(self, url: str) -> None:
     self.buf = b""
+    self.pending = b""
 
     self.req = requests.get(url, stream=True, headers={'Accept-Encoding': 'identity'}, timeout=60)
     self.it = self.req.iter_content(chunk_size=1024 * 1024)
+    # Detect a git-lfs pointer response and switch to the negotiated download URL
+    self.pending = next(self.it, b'')
+    if self.pending.startswith(LFS_POINTER_PREFIX):
+      self.req.close()
+      href = resolve_lfs_pointer(url, self.pending)
+      self.req = requests.get(href, stream=True, headers={'Accept-Encoding': 'identity', **LFS_HEADERS}, timeout=60)
+      self.it = self.req.iter_content(chunk_size=1024 * 1024)
+      self.pending = b''
     self.decompressor = lzma.LZMADecompressor(format=lzma.FORMAT_AUTO)
     self.eof = False
     self.sha256 = hashlib.sha256()
@@ -30,11 +71,14 @@ class StreamingDecompressor:
       if self.decompressor.needs_input:
         self.req.raise_for_status()
 
-        try:
-          compressed = next(self.it)
-        except StopIteration:
-          self.eof = True
-          break
+        if self.pending:
+          compressed, self.pending = self.pending, b''
+        else:
+          try:
+            compressed = next(self.it)
+          except StopIteration:
+            self.eof = True
+            break
       else:
         compressed = b''
 
