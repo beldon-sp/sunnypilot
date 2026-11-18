@@ -16,10 +16,10 @@ export VECLIB_MAXIMUM_THREADS=1
 export QCOM_PRIORITY=12
 
 if [ -z "$AGNOS_VERSION" ]; then
-  # upgrade target: AGNOS 12.8, matching upstream commaai release-tici (comma 3's
-  # last official AGNOS). flash.comma.ai installs the 12.4 baseline; agnos_init
-  # then OTA-upgrades to 12.8 via the official tici manifest in agnos.json.
-  export AGNOS_VERSION="12.8"
+  # upgrade target: AGNOS 15.1 (beldon-repo sync-20251218-tici, already field-deployed
+  # on this C3L clone). flash.comma.ai installs the 12.4 baseline; agnos_init then
+  # OTA-upgrades to 15.1 via the matching tici manifest shipped in agnos.json.
+  export AGNOS_VERSION="15.1"
 fi
 
 # AGNOS rootfs images run weston as the wayland compositor; pyray (spinner, ui)
