@@ -16,7 +16,9 @@ openpilot/selfdrive/assets/sounds/audio_*.wav -filter -diff -merge -text
 openpilot/selfdrive/assets/sounds/tici_disengaged.wav -filter -diff -merge -text
 
 openpilot/selfdrive/car/tests/test_models_segs.txt filter=lfs diff=lfs merge=lfs -text
-openpilot/common/hardware/comma/updater filter=lfs diff=lfs merge=lfs -text
+# updater ships as a plain git blob: the fork's LFS pushurl is read-only, and
+# C3L/tici needs the evdev-fixed zipapp rebuilt from source (34MB < 95MiB cap).
+openpilot/common/hardware/comma/updater -filter -diff -merge binary
 # CJK fonts as regular git objects (port of mouxangithub's approach): the
 # official sunnypilot-lfs HuggingFace endpoint is read-only for forks, and
 # 9.6MB of fonts is acceptable as plain blobs.
