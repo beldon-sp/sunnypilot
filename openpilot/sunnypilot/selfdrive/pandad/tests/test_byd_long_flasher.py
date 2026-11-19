@@ -16,6 +16,7 @@ Flow under test (learned on the target C3L, 2026-11-19):
 import hashlib
 import math
 import os
+import time
 
 import pytest
 from panda import McuType
@@ -395,6 +396,62 @@ def test_non_byd_and_corrupt_params_are_skipped():
   FakeParams.store = {"CarPlatformBundle": None, "CarParamsPersistent": b"BROKEN"}
   m.flash_byd_long(["spi-serial-0001"])
   assert FakePanda.instances == []
+
+
+def test_stale_attempt_marker_does_not_lock_out(isolated, monkeypatch):
+  # clone quirk (observed 2026-11-19): a stable boot_id plus a /dev/shm
+  # snapshot can resurrect the runtime marker across reboots - an old marker
+  # must count as expired, or the flasher locks out permanently after 3
+  # accumulated attempts and the original failure returns
+  FakeParams.store = {"CarPlatformBundle": {"brand": "byd"}}
+  with open(m._ATTEMPT_MARKER, "w") as f:
+    f.write(str(m.MAX_ATTEMPTS_PER_BOOT))
+  old = time.time() - m._MARKER_STALE_S - 60
+  os.utime(m._ATTEMPT_MARKER, (old, old))
+
+  assert m._read_attempts() == 0, "a stale marker must be treated as expired"
+
+  monkeypatch.setattr(m, "DFU_ENTRY_WAIT_S", 0.05)
+  monkeypatch.setattr(m, "FLASH_EXIT_WAIT_S", 0.05)
+  monkeypatch.setattr(m.time, "sleep", lambda s: None)
+  m.flash_byd_long(["spi-serial-0001"])
+  assert len(FakePanda.instances) >= 1, "stale quota must not block provisioning"
+  assert any(a[1] == 0xd1 and a[2] == 0
+             for a in FakePanda.instances[0]._handle.control_writes), "the 0xd1 DFU entry must run"
+  assert m._state_matches(), "provisioning must complete through the stale marker"
+
+
+def test_exhausted_quota_still_jumps_a_parked_dongle_with_valid_state(isolated):
+  # the jump-back is safe and idempotent: it must stay reachable even with the
+  # quota burned, or a sticky runtime marker strands a correctly flashed
+  # dongle in DFU and openpilot boots with no panda (the original bug)
+  FakeParams.store = {"CarPlatformBundle": {"brand": "byd"}}
+  FakeDFU.plugged = True
+  with open(m._ATTEMPT_MARKER, "w") as f:
+    f.write(str(m.MAX_ATTEMPTS_PER_BOOT))
+  os.makedirs(os.path.dirname(m._STATE_PATH), exist_ok=True)
+  with open(m._STATE_PATH, "w") as f:
+    f.write(f"{m.FW_SHA256}:{m.BOOTSTUB_SHA256}")
+
+  m.flash_byd_long([])
+
+  assert len(FakeDFU.instances) == 1
+  assert FakeDFU.instances[0].reset_called, "quota must never block the DFU jump"
+  assert FakeDFU.instances[0]._handle.erased == [] and FakeDFU.instances[0]._handle.programmed == []
+
+
+def test_exhausted_quota_blocks_only_the_parked_dongle_reflash(isolated):
+  FakeParams.store = {"CarPlatformBundle": {"brand": "byd"}}
+  FakeDFU.plugged = True
+  with open(m._ATTEMPT_MARKER, "w") as f:
+    f.write(str(m.MAX_ATTEMPTS_PER_BOOT))
+
+  m.flash_byd_long([])
+
+  assert len(FakeDFU.instances) == 1
+  assert not FakeDFU.instances[0].reset_called, "an unflashed dongle must not be jumped blind"
+  assert FakeDFU.instances[0]._handle.erased == [] and FakeDFU.instances[0]._handle.programmed == []
+  assert any("quota is exhausted" in str(r) for r in isolated.records), "the skip must not be silent"
 
 
 def test_non_uno_panda_is_not_flashed_and_does_not_consume_an_attempt():

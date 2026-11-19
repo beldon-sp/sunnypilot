@@ -102,7 +102,12 @@ def _record_state() -> None:
 # NOTE: some clone devices restore /dev/shm from a persistent snapshot at boot
 # (observed 2026-11-08: marker file mtime months old after reboot), so the
 # marker name is suffixed with the kernel boot_id - a restored stale file can
-# never match the current boot.
+# never match the current boot. Some clones additionally keep a stable boot_id
+# across reboots (observed 2026-11-19: a months-old marker matching the live
+# boot_id), so _read_attempts() also treats an old marker as expired: without
+# that, the quota accumulates across reboots and the flasher locks out
+# permanently after 3 total attempts - the exact recurrence this module
+# exists to prevent.
 def _boot_scoped_marker() -> str:
   try:
     with open("/proc/sys/kernel/random/boot_id") as f:
@@ -113,12 +118,18 @@ def _boot_scoped_marker() -> str:
 
 
 MAX_ATTEMPTS_PER_BOOT = 3
+# a runtime marker older than this cannot be from the current provisioning
+# session; re-provisioning is idempotent and signature-guarded, so erring
+# toward "expired" is always the safe direction
+_MARKER_STALE_S = 3600
 _ATTEMPT_MARKER = _boot_scoped_marker()
 _flash_attempted = False
 
 
 def _read_attempts() -> int:
   try:
+    if time.time() - os.path.getmtime(_ATTEMPT_MARKER) > _MARKER_STALE_S:
+      return 0  # stale/snapshot-restored marker - never lock out on it
     with open(_ATTEMPT_MARKER) as f:
       return int(f.read().strip())
   except Exception:
@@ -205,7 +216,9 @@ def _dfu_recover_dongle(dfu_serials: list[str], blobs: dict) -> None:
   """A dongle found in DFU mode (fast boot keeps it powered across reboots).
 
   If our pair is already verified written (state marker), a plain DFU jump
-  starts it; otherwise the pair is flashed over DFU and then jumped."""
+  starts it; otherwise the pair is flashed over DFU and then jumped. The jump
+  is safe and idempotent, so it must NEVER be blocked by the attempt quota -
+  only the erase/write branch is."""
   dfu = PandaDFU(dfu_serials[0])
   try:
     try:
@@ -221,6 +234,12 @@ def _dfu_recover_dongle(dfu_serials: list[str], blobs: dict) -> None:
     if _state_matches():
       cloudlog.info("BYD dongle parked in DFU with the longitudinal pair already written - jumping to app")
       dfu.reset()
+      return
+
+    if _flash_attempted or _read_attempts() >= MAX_ATTEMPTS_PER_BOOT:
+      cloudlog.warning(f"BYD dongle parked in DFU needs a pair flash, but the "
+                       f"attempt quota is exhausted this boot ({_read_attempts()}/{MAX_ATTEMPTS_PER_BOOT}) - "
+                       "next boot retries")
       return
 
     _record_attempt()
@@ -314,7 +333,7 @@ def _flash_panda(panda: Panda, blobs: dict, serial: str) -> None:
 
 def flash_byd_long(panda_serials: list[str]) -> None:
   global _flash_attempted
-  if _flash_attempted or _read_attempts() >= MAX_ATTEMPTS_PER_BOOT or not os.path.isfile(FW_PATH):
+  if not os.path.isfile(FW_PATH):
     return
 
   try:
@@ -341,10 +360,17 @@ def flash_byd_long(panda_serials: list[str]) -> None:
     blobs[name] = code
 
   # a dongle parked in DFU never appears in Panda.list(), so check DFU first;
-  # on this rig the dongle IS the (only) panda
+  # on this rig the dongle IS the (only) panda. Handled BEFORE the attempt
+  # quota: the jump-back branch must stay reachable even when this boot has
+  # burned its quota - otherwise a clone with a sticky runtime marker would
+  # strand a correctly-flashed dongle in DFU forever (openpilot then boots
+  # with no panda, i.e. the exact bug this module fixes).
   dfu_serials = PandaDFU.list()
   if dfu_serials:
     _dfu_recover_dongle(dfu_serials, blobs)
+    return
+
+  if _flash_attempted or _read_attempts() >= MAX_ATTEMPTS_PER_BOOT:
     return
 
   # Panda.list() already covers USB *and* SPI. The DOS/UNO panda in C3L clones

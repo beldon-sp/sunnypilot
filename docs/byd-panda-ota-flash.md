@@ -58,9 +58,21 @@
 
 1. **DFU 停驻优先**：`PandaDFU.list()` 非空时先处理 dongle——持久状态标记（`/data/persist/byd_long_fw_state`，记录已验证写入的 fw+bootstub sha 对）已匹配则仅 `dfu.reset()` 跳转；否则 DFU 直写配对后跳转并写标记。非 F4 的 DFU 设备一律不碰（归 pandad 打包镜像恢复管）。
 2. **app 模式**：签名一致 → 直接返回（不消耗配额）；不一致 → USB `0xd1` 软进 DFU（有界等待 25s）→ DFU 直写配对 → 跳转 → 有界等待重枚举并验签（20s）。GPIO 路径删除。
-3. 配额逻辑保留（`/dev/shm` boot_id 标记，每 boot 最多 3 次写操作；跳转不消耗配额）。
+3. 配额逻辑（`/dev/shm` boot_id 标记，每 boot 最多 3 次写操作；跳转不消耗配额）。**2026-11-20 复查修正**：
+   - 配额门只能挡"擦写"分支，**绝不能挡 DFU 跳转**——否则配额耗尽时一个已刷好固件对的 dongle 会被永远卡在 DFU，openpilot 起不来（等于复发）。跳转分支在配额检查之前执行。
+   - `_read_attempts()` 增加**新鲜度检查**（标记 mtime 超过 1 小时视为过期）：本机实测 `/dev/shm` 会被快照还原、boot_id 可能跨重启不变（2026-11-19：7 月 mtime 的标记匹配当前 boot_id），若不检查，配额会跨重启累积、3 次后**永久锁死**刷写——这正是"重刷/换设备后问题复发"的路径。
 
-配套测试 `tests/test_byd_long_flasher.py` 全绿（21 项，2026-11-19）。
+配套测试 `tests/test_byd_long_flasher.py` 全绿（24 项，2026-11-20）。
+
+## 七A、全新设备/重刷设备的预期行为（自愈路径）
+
+CNB release 包含两个固件 bin（`release_files.py` 全量拷贝 tracked 文件，bin 为普通 git blob），因此换设备刷本仓库固件链路成立。预期时序：
+
+1. **Boot 1**（dongle 跑厂商固件）：签名不一致 → `0xd1` 进 DFU。本机实测该克隆机 MCU 侧 USB 重枚举可能不回来（需要断电）→ 刷写标记失败 1 次，openpilot 无 panda（屏幕会报 panda 掉线）。
+2. **断电重启 → Boot 2**：dongle 以 DFU 枚举（fast boot 停驻或冷启动 strap）→ pandad 检测到无打包 F4 镜像不碰它 → `flash_byd_long` DFU 直写 bootstub+app → `dfu.reset()` 跳转 → app 枚举回来 → 写持久标记。**一次断电循环内自愈完成**。
+3. 此后每次启动：app 在跑 → 签名一致直接返回；若 dongle 又停在 DFU（断电采到 BOOT0 高）→ 标记命中 → 仅跳转，秒级恢复。
+
+所以：换设备刷完后**看到 panda 掉线不要慌，断电重启一次即可**；若两次断电后仍无 panda，按第六节手动程序排查。
 
 ## 八、刷机后 LKAS 相关告警解释（2026-11-19 实测）
 
