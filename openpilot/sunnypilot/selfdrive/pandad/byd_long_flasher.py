@@ -7,44 +7,46 @@ See the LICENSE.md file in the root directory for more details.
 
 BYD longitudinal firmware delivery over OTA (the device is never hand-flashed).
 
-The clone DOS pandas in BYD Song Plus DM-i 2022 report hw_type UNO(0x05) or
-DOS(0x06) and are STM32F4 based. sunnypilot's panda library only keeps H7
-devices in SUPPORTED_DEVICES, so Panda.flash()/reset() refuse them and the MCU
-never gets a firmware update. A panda without BYD_PARAM_LONGITUDINAL rejects
-the whole 0x32D/E/F ACC stream, controls_allowed never latches, and selfdrived
-raises controlsMismatch via mismatch_counter >= 200.
+The BYD Song Plus DM-i 2022 C3L clone carries a DOS/UNO F4 panda as an INTERNAL
+USB device (it enumerates on the device's own USB bus, not an external port),
+reports hw_type UNO(0x05) or DOS(0x06), and is STM32F4 based. sunnypilot's
+panda library only keeps H7 devices in SUPPORTED_DEVICES, so Panda.flash()/
+reset() refuse it and the MCU never gets a firmware update from pandad's
+flash_panda(). A panda whose safety model lacks the BYD_PARAM_LONGITUDINAL
+behavior rejects the host's 0x32D/E/F ACC stream, controls_allowed never
+latches, and selfdrived raises controlsMismatch / bydLongFirmwareMissing.
 
 Delivered firmware: the architecture-matched panda_fw_base@9d0a0046 build
-(DEV-9d0a0046-DEBUG, F4/UNO forced, USB VID 0x3801). It is a transparent ACC
-replacement (no "byd acc inject" fwd hooks), so the host-spoofed 0x316 LKAS
-stream passes through and lateral control works. Verified live on 2026-11-08:
-set_safety_mode(35, 2) latches, safety_tx_blocked stays 0 (the vendor image
-blocked ~50/s), pandad accepts the signature. Its health packet is carrot v17
-(59 bytes); pandad's get_state() tells the three layouts apart by reply size,
-see selfdrive/pandad/panda.h.
+(DEV-9d0a0046-DEBUG, F4/UNO forced, USB VID 0x3801). Verified live 2026-11-19
+on the target car: pandad sets safety model 35 with the LONGITUDINAL param and
+safetyTxBlocked stays 0.
 
-CRITICAL - bootstub/app signature pairing (learned 2026-11-08, see
-docs/byd-panda-fw-build.md section 7): a DEV-signed app is only accepted by a
-dev bootstub built from the same commit (ALLOW_DEBUG). A vendor release
-bootstub rejects it, and bootstub.c's fail() drops the board into the USB soft
-flasher, which never leaves bootstub - that looks exactly like the app
-"crash-looping" but the app never runs. bootstub.c has no version endpoint, so
-the bootstub's identity cannot be queried over USB. Therefore the ONLY safe
-update path is the unconditional DFU pair-flash: force DFU via BOOT0, write
-our dev bootstub, then flash the app through it.
+Entry into DFU (learned 2026-11-19 on the target C3L):
+  * The SoC GPIO BOOT0 pulse (recover_internal_panda, GPIO 124/134) is wired to
+    the comma-three internal panda, NOT to this USB dongle - it can never put
+    the dongle into DFU. Do not rely on it.
+  * USB request 0xd1 (wValue=0, Panda.reset(enter_bootloader=True)) makes the
+    app firmware reboot into the ST system bootloader. This is the reliable
+    entry and is used as the primary path here.
+  * With the device's "fast boot" enabled, USB power survives device reboots,
+    so a dongle parked in DFU stays in DFU across reboots and re-enumerates
+    once the USB host stack comes back. flash_byd_long() therefore handles
+    "found in DFU" as a first-class state: jump to the app if our pair is
+    already written (persistent state marker), full pair-flash otherwise.
+  * Re-enumeration after an MCU-initiated USB change can be slow or need a
+    power cycle on this clone. Every wait is bounded, and the app is written
+    STRAIGHT over DFU (erase_sector + program) in the same DFU session as the
+    bootstub, so the board never has to come back as bootstub mid-flash.
+
+CRITICAL - bootstub/app signature pairing (see docs/byd-panda-ota-flash.md): a
+DEV-signed app is only accepted by a dev bootstub built from the same commit
+(ALLOW_DEBUG). The bootstub's identity cannot be queried over USB, so the
+app is never flashed through an unknown bootstub - always the DFU pair route.
 
 This module mirrors rivian_long_flasher.py: the firmware lives in the main
 repo (so OTA carries it) and flashing bypasses the SUPPORTED_DEVICES gate.
 pandad.py's flash_panda() skips UNO/DOS devices, so the H7 firmware can never
 overwrite this one.
-
-Two differences from the USB-only Rivian kit matter here:
-  * these clones may present the DOS/UNO panda over SPI as an internal panda,
-    so all of Panda.list() is scanned (USB + SPI), and the write chunk matches
-    Panda.flash_static()/the vendor flasher (0x200, not 0x10);
-  * Panda.reconnect() calls connect(wait=True), which loops forever when a
-    stale bootloader drops to the system-memory bootloader instead of coming
-    back as a panda. Every re-open here is bounded by wait_for_link() instead.
 """
 import hashlib
 import os
@@ -53,24 +55,45 @@ from itertools import accumulate
 
 from openpilot.cereal import messaging
 from opendbc.car.structs import car
-from panda import Panda, PandaDFU
-from openpilot.common.hardware import HARDWARE
+from panda import Panda, PandaDFU, McuType
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 
 FW_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "byd_long_fw.bin.signed")
 BOOTSTUB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "byd_long_bootstub.bin")
 # panda_fw_base@9d0a0046 build (DEV-9d0a0046-DEBUG) - verified running on the
-# target board on 2026-11-08 after the paired DFU flash below. FW and bootstub
-# MUST come from the same scons run: the bootstub verifies the app signature,
-# and the dev bootstub is the only one that accepts a DEV-signed app.
+# target car on 2026-11-19 (see module docstring). FW and bootstub MUST come
+# from the same scons run: the bootstub verifies the app signature, and the dev
+# bootstub is the only one that accepts a DEV-signed app.
 FW_SHA256 = "af5174fcf8e0f3f6faca28299903c4ce7c3e2781db403bfbe029c4d4348f75b6"
 BOOTSTUB_SHA256 = "eefd4cc8d513f8f44de43ea620e6fa16e05506066d2068d738e85c028fde7dd4"
-SECTOR_SIZES = [0x4000] * 4 + [0x10000] + [0x20000] * 11
 BYD_LEGACY_HW_TYPES = (b'\x05', b'\x06')  # uno, dos
-DFU_ENTRY_WAIT_S = 20
-BOOTSTUB_WAIT_S = 15
-FLASH_EXIT_WAIT_S = 15
+DFU_ENTRY_WAIT_S = 25
+FLASH_EXIT_WAIT_S = 20
+
+# Persistent state marker (NOT /dev/shm): with fast boot the dongle never loses
+# power, so "parked in DFU" can persist across many reboots. The marker records
+# that this exact bootstub+app pair has been verified written, letting a parked
+# dongle be started with a plain DFU jump instead of a full reflash.
+_STATE_PATH = "/data/persist/byd_long_fw_state"
+
+
+def _state_matches() -> bool:
+  try:
+    with open(_STATE_PATH) as f:
+      return f.read().strip() == f"{FW_SHA256}:{BOOTSTUB_SHA256}"
+  except Exception:
+    return False
+
+
+def _record_state() -> None:
+  try:
+    os.makedirs(os.path.dirname(_STATE_PATH), exist_ok=True)
+    with open(_STATE_PATH, "w") as f:
+      f.write(f"{FW_SHA256}:{BOOTSTUB_SHA256}")
+  except Exception:
+    cloudlog.exception("BYD flasher: cannot write persistent state marker")
+
 
 # _flash_attempted only lives as long as the pandad.py process. manager.py can
 # restart that process, so keep a small runtime counter in /dev/shm (cleared on
@@ -155,77 +178,138 @@ def wait_for_link(panda: Panda, timeout: float) -> bool:
   return False
 
 
-def _dfu_pair_flash(bootstub_code: bytes) -> None:
-  """Write our dev bootstub over DFU. Erases every app sector as a side
-  effect; the caller must flash the app right after."""
-  deadline = time.monotonic() + DFU_ENTRY_WAIT_S
-  while True:
-    HARDWARE.recover_internal_panda()  # BOOT0 high + reset = ST system bootloader
-    time.sleep(0.5)
-    serials = PandaDFU.list()
-    if serials:
-      break
-    if time.monotonic() > deadline:
-      raise RuntimeError("BYD panda did not enter DFU mode")
-  cloudlog.info(f"BYD panda in DFU mode ({serials[0]}), writing paired dev bootstub")
-  dfu = PandaDFU(serials[0])
-  try:
-    # erases all sectors, programs the bootstub at 0x08000000, then jumps to it
-    dfu.program_bootstub(bootstub_code)
-    dfu.reset()
-  finally:
-    dfu.close()
+def _dfu_program_pair(dfu: PandaDFU, bootstub_code: bytes, fw_code: bytes) -> None:
+  """Write the bootstub AND the app straight over DFU, in one DFU session.
 
+  The packaged panda lib only knows program_bootstub(); the app is written
+  with the same DFU primitives (erase_sector + program). Doing both here means
+  the board never has to re-enumerate as bootstub mid-flash - on C3L clones an
+  MCU-initiated USB re-enumeration can take a full power cycle to recover."""
+  mcu = dfu.get_mcu_type()
+  assert mcu == McuType.F4, f"refusing to write the F4 sector map to a {mcu.name} board"
 
-def _flash_static(handle, code):
-  assert Panda.flasher_present(handle)
-  last_sector = next((i + 1 for i, v in enumerate(accumulate(SECTOR_SIZES[1:])) if v > len(code)), -1)
+  dfu.program_bootstub(bootstub_code)
+
+  handle = dfu._handle
+  sizes = mcu.config.sector_sizes
+  last_sector = next((i + 1 for i, v in enumerate(accumulate(sizes[1:])) if v > len(fw_code)), -1)
   assert 1 <= last_sector < 7, "Invalid firmware size"
-
-  handle.controlWrite(Panda.REQUEST_IN, 0xb1, 0, 0, b'')
   for i in range(1, last_sector + 1):
-    handle.controlWrite(Panda.REQUEST_IN, 0xb2, i, 0, b'')
-  # 0x200 matches Panda.flash_static() and the vendor F4 flasher. The 16-byte
-  # chunks used by the USB-only Rivian kit would mean >5500 SPI transfers for
-  # an 88 KB image, which can outlive the bootstub's transfer window.
-  STEP = 0x200
-  for i in range(0, len(code), STEP):
-    handle.bulkWrite(2, code[i:i + STEP])
+    handle.clear_status()
+    handle.erase_sector(i)
+  handle.clear_status()
+  handle.program(mcu.config.app_address, fw_code)
+
+
+def _dfu_recover_dongle(dfu_serials: list[str], blobs: dict) -> None:
+  """A dongle found in DFU mode (fast boot keeps it powered across reboots).
+
+  If our pair is already verified written (state marker), a plain DFU jump
+  starts it; otherwise the pair is flashed over DFU and then jumped."""
+  dfu = PandaDFU(dfu_serials[0])
   try:
-    handle.controlWrite(Panda.REQUEST_IN, 0xd8, 0, 0, b'', expect_disconnect=True)
+    try:
+      mcu = dfu.get_mcu_type()
+    except Exception:
+      cloudlog.exception(f"BYD flasher: cannot read MCU type of DFU device {dfu_serials[0]}")
+      return
+    if mcu != McuType.F4:
+      # e.g. an H7 panda parked in DFU; pandad's packaged-image recovery owns those
+      cloudlog.info(f"DFU device {dfu_serials[0]} is {mcu.name}, not the BYD F4 dongle - leaving it alone")
+      return
+
+    if _state_matches():
+      cloudlog.info("BYD dongle parked in DFU with the longitudinal pair already written - jumping to app")
+      dfu.reset()
+      return
+
+    _record_attempt()
+    cloudlog.info(f"Flashing BYD longitudinal pair straight over DFU ({dfu_serials[0]})")
+    _dfu_program_pair(dfu, blobs["bootstub"], blobs["firmware"])
+    dfu.reset()
+    _record_state()
+    cloudlog.info("BYD longitudinal pair flashed over DFU and jumped to app")
+  except Exception as e:
+    # A failed flash is never silent: the board may be in bootstub or DFU and
+    # needs the paired DFU flow (docs/byd-panda-ota-flash.md).
+    hint = "Recover with the paired DFU flow: 0xd1 or power-cycle into DFU -> flash pair -> jump."
+    cloudlog.exception(f"BYD longitudinal firmware flash FAILED for DFU device: {e}. {hint}")
+  finally:
+    try:
+      dfu.close()
+    except Exception:
+      pass
+
+
+def _software_dfu_entry(panda: Panda) -> bool:
+  """USB request 0xd1 (wValue=0) makes the app reboot into the ST system
+  bootloader. The SoC GPIO BOOT0 pulse does not reach the C3L's internal USB
+  dongle, so this is the only software entry."""
+  try:
+    panda._handle.controlWrite(Panda.REQUEST_IN, 0xd1, 0, 0, b'', expect_disconnect=True)
+  except Exception:
+    pass  # the device drops the bus as it reboots into DFU
+  try:
+    panda.close()
   except Exception:
     pass
 
+  deadline = time.monotonic() + DFU_ENTRY_WAIT_S
+  while time.monotonic() < deadline:
+    if PandaDFU.list():
+      return True
+    time.sleep(0.5)
+  return False
 
-def _flash_panda(panda: Panda, code: bytes, bootstub_code: bytes, serial: str) -> None:
+
+def _flash_panda(panda: Panda, blobs: dict, serial: str) -> None:
   expected_sig = Panda.get_signature_from_firmware(FW_PATH)
   if not panda.bootstub and panda.get_signature() == expected_sig:
     cloudlog.info("BYD panda already running longitudinal firmware")
+    _record_state()
     return
 
   # count before touching hardware so a failure can never loop-flash;
   # an already-up-to-date panda must not consume the per-boot quota
   _record_attempt()
 
-  # The bootstub's identity cannot be queried (no version endpoint in
-  # bootstub.c) and a vendor bootstub rejects our DEV-signed app, so an
-  # app-only flash through an unknown bootstub is never safe: always go the
-  # DFU pair-flash route (docs/byd-panda-fw-build.md sections 5 and 7).
-  cloudlog.info(f"Pair-flashing BYD longitudinal firmware (bootstub+app) to F4 panda {serial} via DFU")
-  _dfu_pair_flash(bootstub_code)
+  if not _software_dfu_entry(panda):
+    raise RuntimeError("BYD panda did not enter DFU mode via USB 0xd1 "
+                       "(the SoC BOOT0 pulse does not reach the C3L internal dongle)")
 
-  panda.close()
-  # DFU erased everything: the board must come back in OUR bootstub.
-  if not wait_for_link(panda, BOOTSTUB_WAIT_S) or not panda.bootstub:
-    raise RuntimeError("BYD panda did not return as bootstub after DFU bootstub flash")
+  dfu_serials = PandaDFU.list()
+  dfu = PandaDFU(dfu_serials[0])
+  try:
+    _dfu_program_pair(dfu, blobs["bootstub"], blobs["firmware"])
+    dfu.reset()
+  finally:
+    try:
+      dfu.close()
+    except Exception:
+      pass
 
-  _flash_static(panda._handle, code)
-  panda.close()
-  if not wait_for_link(panda, FLASH_EXIT_WAIT_S) or panda.bootstub:
-    raise RuntimeError("BYD panda did not leave bootstub after flashing")
-  if panda.get_signature() != expected_sig:
-    raise RuntimeError("BYD longitudinal firmware signature mismatch after flashing")
-  cloudlog.info("BYD longitudinal firmware flashed and verified")
+  # bounded re-enumeration + signature verify; on this clone the re-enumeration
+  # after a jump can be slow, and a power cycle may be needed - the next setup
+  # pass (or next boot) then sees the running pair and verifies it instead
+  deadline = time.monotonic() + FLASH_EXIT_WAIT_S
+  while time.monotonic() < deadline:
+    try:
+      p = Panda(serial)
+      try:
+        if not p.bootstub:
+          if p.get_signature() == expected_sig:
+            _record_state()
+            cloudlog.info("BYD longitudinal firmware flashed and verified")
+            return
+          raise RuntimeError("BYD longitudinal firmware signature mismatch after flashing")
+      finally:
+        p.close()
+    except RuntimeError:
+      raise
+    except Exception:
+      pass
+    time.sleep(0.5)
+  raise RuntimeError("BYD panda did not re-enumerate as the flashed app within the wait window")
 
 
 def flash_byd_long(panda_serials: list[str]) -> None:
@@ -256,6 +340,13 @@ def flash_byd_long(panda_serials: list[str]) -> None:
       return
     blobs[name] = code
 
+  # a dongle parked in DFU never appears in Panda.list(), so check DFU first;
+  # on this rig the dongle IS the (only) panda
+  dfu_serials = PandaDFU.list()
+  if dfu_serials:
+    _dfu_recover_dongle(dfu_serials, blobs)
+    return
+
   # Panda.list() already covers USB *and* SPI. The DOS/UNO panda in C3L clones
   # is treated as an internal panda by pandad.py, so filtering on usb_list()
   # would silently skip the very device we need to upgrade.
@@ -273,12 +364,12 @@ def flash_byd_long(panda_serials: list[str]) -> None:
         continue
       if hw_type not in BYD_LEGACY_HW_TYPES:
         continue
-      _flash_panda(panda, blobs["firmware"], blobs["bootstub"], serial)
+      _flash_panda(panda, blobs, serial)
       return
     except Exception as e:
       # A failed flash is never silent: the board may be in bootstub or DFU and
-      # needs the paired DFU recovery (docs/byd-panda-fw-build.md section 5).
-      hint = "Recover with the paired DFU flow: recover_internal_panda() -> PandaDFU.recover() -> BOOT0=0 -> flash app."
+      # needs the paired DFU flow (docs/byd-panda-ota-flash.md).
+      hint = "Recover with the paired DFU flow: 0xd1 or power-cycle into DFU -> flash pair -> jump."
       cloudlog.exception(f"BYD longitudinal firmware flash FAILED for {serial}: {e}. {hint}")
       return
     finally:

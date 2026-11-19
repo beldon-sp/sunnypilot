@@ -119,20 +119,37 @@ def main() -> None:
         HARDWARE.recover_internal_panda()
       count += 1
 
-      # Flash all Pandas in DFU mode
+      # Flash all Pandas in DFU mode that have a packaged recovery image for
+      # their MCU type. board/obj only ships H7 images, and recover() would
+      # crash with FileNotFoundError on anything else - e.g. the BYD F4
+      # dongle, which flash_byd_long() below flashes over DFU itself.
       for serial in PandaDFU.list():
-        cloudlog.info(f"Panda in DFU mode found, flashing recovery {serial}")
-        PandaDFU(serial).recover()
+        try:
+          dfu = PandaDFU(serial)
+          try:
+            if os.path.isfile(os.path.join(FW_PATH, dfu.get_mcu_type().config.bootstub_fn)):
+              cloudlog.info(f"Panda in DFU mode found, flashing recovery {serial}")
+              dfu.recover()
+            else:
+              cloudlog.info(f"Panda {serial} in DFU mode has no packaged {dfu.get_mcu_type().name} image, leaving it to the BYD flasher")
+          finally:
+            dfu.close()
+        except Exception:
+          cloudlog.exception(f"DFU recovery failed for {serial}")
         time.sleep(1)
 
       panda_serials = Panda.list()
       if len(panda_serials):
         # custom flasher for xnor's Rivian Longitudinal Upgrade Kit
         flash_rivian_long(panda_serials)
-        # BYD clone DOS pandas (UNO/DOS F4) are dropped from SUPPORTED_DEVICES by
-        # the panda library, so deliver the vendor longitudinal firmware here.
-        # flash_panda() below skips these hw types, so H7 firmware cannot undo it.
-        flash_byd_long(panda_serials)
+      # BYD clone DOS pandas (UNO/DOS F4) are dropped from SUPPORTED_DEVICES by
+      # the panda library, so deliver the vendor longitudinal firmware here.
+      # Must run even when Panda.list() is empty: with the device's fast boot
+      # the internal dongle can stay powered in DFU mode across reboots, and
+      # then only this call (which handles DFU-parked dongles) can start it.
+      # flash_panda() below skips these hw types, so H7 firmware cannot undo it.
+      flash_byd_long(panda_serials)
+      if len(panda_serials):
         # find the internal supported panda (e.g. skip external Black Panda)
         panda_serials = check_panda_support(panda_serials)
 
