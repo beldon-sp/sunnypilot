@@ -82,6 +82,6 @@ CNB release 包含两个固件 bin（`release_files.py` 全量拷贝 tracked 文
 ## 九、遗留问题
 
 1. **f8fe1c84 镜像本地无副本**：dongle 原厂在跑的 DEBUG 构建来源不明（疑为厂商安装工具或 carrot OTA 写入）。如需回退，先用本机现有 7287ff0c/6e4111d4。
-2. **屏幕闪烁（摄像头画面闪缩）**：UI 日志大量 `Failed to duplicate frame fd when creating EGL image: Bad file descriptor` + FPS 掉到 41，与纵向固件无关，需单独排查（相机 buffer fd 生命周期 / weston / rootfs）。
+2. ~~**屏幕闪烁（摄像头画面闪缩）**~~：**已消失（2026-11-20 用户确认）**。此前 UI 日志的 `Failed to duplicate frame fd when creating EGL image: Bad file descriptor` + FPS 掉到 41 疑似与纵向固件缺位/openpilot 异常状态相关；纵向固件刷好、链路打通后不再复现，无需单独排查。若日后复发再按相机 buffer fd 生命周期 / weston / rootfs 方向排查。
 3. fast boot 下 dongle 断电行为仍不完全可控；自动流程已覆盖"DFU 停驻"，但"app 停驻 + 需要重刷"仍依赖 0xd1 成功枚举。
 4. CNB release 打包需确认 `byd_long_fw.bin.signed`/`byd_long_bootstub.bin` 随包分发（本次设备上两文件已随包到位）。
