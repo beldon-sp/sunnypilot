@@ -398,6 +398,54 @@ def test_non_byd_and_corrupt_params_are_skipped():
   assert FakePanda.instances == []
 
 
+def test_dfu_parked_dongle_bootstraps_without_any_byd_params(isolated):
+  # fresh/wiped device: no CarPlatformBundle, no CarParamsPersistent, dongle
+  # parks in DFU at cold boot (and this release ships no F4 recovery image).
+  # Gating the DFU path on _is_byd() would dead-end: no panda -> no
+  # fingerprint -> no params -> never provisioned. The DFU path must run.
+  FakeParams.store = {}
+  FakeDFU.plugged = True
+  m.flash_byd_long([])
+
+  assert len(FakeDFU.instances) == 1
+  dfu = FakeDFU.instances[0]
+  with open(BOOTSTUB, "rb") as f:
+    assert dfu_written_bootstub(dfu) == f.read()
+  with open(FW, "rb") as f:
+    assert dfu_written_app(dfu) == f.read()
+  assert dfu.reset_called and dfu.closed
+  assert m._state_matches(), "the bootstrap flash must persist its state marker"
+
+
+def test_dfu_parked_dongle_jumps_without_any_byd_params(isolated):
+  # same fresh device, but the pair is already written (e.g. wipe kept the
+  # dongle flash but cleared /data/persist is NOT this case - this is a second
+  # DFU park after a verified flash): a marker match is always safe to jump
+  FakeParams.store = {}
+  FakeDFU.plugged = True
+  os.makedirs(os.path.dirname(m._STATE_PATH), exist_ok=True)
+  with open(m._STATE_PATH, "w") as f:
+    f.write(f"{m.FW_SHA256}:{m.BOOTSTUB_SHA256}")
+
+  m.flash_byd_long([])
+
+  assert len(FakeDFU.instances) == 1
+  assert FakeDFU.instances[0].reset_called, "a verified pair needs only a jump, params or not"
+  assert FakeDFU.instances[0]._handle.erased == [] and FakeDFU.instances[0]._handle.programmed == []
+
+
+def test_dfu_parked_non_f4_device_without_params_is_still_left_alone(isolated):
+  # the bootstrap relaxation must not swallow other DFU devices
+  FakeParams.store = {}
+  FakeDFU.plugged = True
+  FakeDFU.mcu_type = McuType.H7
+  m.flash_byd_long([])
+
+  assert len(FakeDFU.instances) == 1
+  assert not FakeDFU.instances[0].reset_called
+  assert FakeDFU.instances[0]._handle.erased == [] and FakeDFU.instances[0]._handle.programmed == []
+
+
 def test_stale_attempt_marker_does_not_lock_out(isolated, monkeypatch):
   # clone quirk (observed 2026-11-19): a stable boot_id plus a /dev/shm
   # snapshot can resurrect the runtime marker across reboots - an old marker

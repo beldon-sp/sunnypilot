@@ -336,14 +336,19 @@ def flash_byd_long(panda_serials: list[str]) -> None:
   if not os.path.isfile(FW_PATH):
     return
 
-  try:
-    if not _is_byd():
-      return
-  except Exception:
-    # never let a params/cereal failure take down pandad.py's setup loop
-    cloudlog.exception("BYD flasher: vehicle brand check failed, skipping")
-    return
-
+  # a dongle parked in DFU never appears in Panda.list(), so check DFU first;
+  # on this rig the dongle IS the (only) panda. Handled BEFORE the brand gate
+  # AND the attempt quota, for two hard reasons learned on real hardware:
+  #   * quota: the jump-back must stay reachable even when this boot has burned
+  #     its quota - otherwise a sticky runtime marker would strand a correctly
+  #     flashed dongle in DFU forever (openpilot then boots with no panda).
+  #   * brand: on a freshly wiped or brand-new C3L there are NO BYD params yet
+  #     (fingerprinting needs a connected panda's CAN). Gating the DFU path on
+  #     _is_byd() dead-ends: no panda -> no fingerprint -> no params -> never
+  #     provisioned. A DFU-parked UNO/DOS F4 dongle under a byd-tici release is
+  #     the provisioning target by construction, and flashing the transparent
+  #     build is harmless to any other car (no engagement without a matching
+  #     fingerprint).
   blobs = {}
   for name, path, sha in (("firmware", FW_PATH, FW_SHA256), ("bootstub", BOOTSTUB_PATH, BOOTSTUB_SHA256)):
     try:
@@ -359,15 +364,18 @@ def flash_byd_long(panda_serials: list[str]) -> None:
       return
     blobs[name] = code
 
-  # a dongle parked in DFU never appears in Panda.list(), so check DFU first;
-  # on this rig the dongle IS the (only) panda. Handled BEFORE the attempt
-  # quota: the jump-back branch must stay reachable even when this boot has
-  # burned its quota - otherwise a clone with a sticky runtime marker would
-  # strand a correctly-flashed dongle in DFU forever (openpilot then boots
-  # with no panda, i.e. the exact bug this module fixes).
   dfu_serials = PandaDFU.list()
   if dfu_serials:
     _dfu_recover_dongle(dfu_serials, blobs)
+    return
+
+  # the app-mode 0xd1 flash is the invasive path: keep the vehicle brand gate
+  try:
+    if not _is_byd():
+      return
+  except Exception:
+    # never let a params/cereal failure take down pandad.py's setup loop
+    cloudlog.exception("BYD flasher: vehicle brand check failed, skipping")
     return
 
   if _flash_attempted or _read_attempts() >= MAX_ATTEMPTS_PER_BOOT:

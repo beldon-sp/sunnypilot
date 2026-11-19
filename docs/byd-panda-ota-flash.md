@@ -64,15 +64,21 @@
 
 配套测试 `tests/test_byd_long_flasher.py` 全绿（24 项，2026-11-20）。
 
-## 七A、全新设备/重刷设备的预期行为（自愈路径）
+## 七A、全新设备 / 全清后重刷的预期行为（自愈路径，2026-11-20 复查）
 
-CNB release 包含两个固件 bin（`release_files.py` 全量拷贝 tracked 文件，bin 为普通 git blob），因此换设备刷本仓库固件链路成立。预期时序：
+CNB release 包含两个固件 bin（`release_files.py` 全量拷贝 tracked 文件，bin 为普通 git blob），因此换设备或全清（flash.comma.ai 重刷 AGNOS 后装 byd-tici）链路成立。已验证的依赖链关键点：
 
-1. **Boot 1**（dongle 跑厂商固件）：签名不一致 → `0xd1` 进 DFU。本机实测该克隆机 MCU 侧 USB 重枚举可能不回来（需要断电）→ 刷写标记失败 1 次，openpilot 无 panda（屏幕会报 panda 掉线）。
-2. **断电重启 → Boot 2**：dongle 以 DFU 枚举（fast boot 停驻或冷启动 strap）→ pandad 检测到无打包 F4 镜像不碰它 → `flash_byd_long` DFU 直写 bootstub+app → `dfu.reset()` 跳转 → app 枚举回来 → 写持久标记。**一次断电循环内自愈完成**。
-3. 此后每次启动：app 在跑 → 签名一致直接返回；若 dongle 又停在 DFU（断电采到 BOOT0 高）→ 标记命中 → 仅跳转，秒级恢复。
+- **pandad 能连厂商固件的 dongle**：`LEGACY_INTERNAL_HW_TYPES = (UNO, DOS)` 使 check_panda_support 放行 DOS(0x06) dongle → CAN 通 → 指纹可以发生。
+- **DFU 路径不受品牌门控（防死锁）**：全清设备上没有任何 BYD params（`_is_byd()` 为 False），而指纹又需要 panda 连接才能发生——若 DFU 路径被品牌门挡住，就会"没 panda → 没指纹 → 没 params → 永远不刷"死锁。现 DFU 停驻路径无条件处理（F4 UNO/DOS + byd-tici release 即目标，透明固件刷错车也无害——指纹不匹配不会介入）。品牌门只保留给 app 模式下发 `0xd1` 的主动刷写路径。
 
-所以：换设备刷完后**看到 panda 掉线不要慌，断电重启一次即可**；若两次断电后仍无 panda，按第六节手动程序排查。
+预期时序（分两种 dongle 初始状态）：
+
+1. **全新设备（dongle 跑厂商固件、app 模式）**：首 boot 无 BYD params → flasher 跳过（不消耗配额）→ pandad 正常连接 → 驾驶/手动选车后 CarParamsPersistent/Bundle 写入 → 下一 boot：0xd1 → dongle 可能消失（本机特性）→ **断电重启一次** → DFU 停驻 → 品牌参数已具备 → DFU 直写配对 → 跳转 → 完成。
+2. **全新设备且 dongle 冷启动直接停在 DFU（本机实测出现过）**：无 params 也会 DFU 直写引导——**首 boot 即完成刷写**，无需等待指纹。
+3. **本机全清重刷（dongle flash 里已是 9d0a0046）**：冷启动为 app 模式（全清意味着长时间断电，非 fast boot 停驻）→ 无需刷写 → 重新配 SSH key、重新选车/指纹、重开 AlphaLongitudinalEnabled 即可。若万一 DFU 停驻：状态标记随 /data 被清 → DFU 路径无条件重刷一遍（幂等，signature 守护）→ 自愈。
+4. 刷写期间/刷写前若已开 AlphaLongitudinal 且固件还没刷上，"缺少纵向控制固件"告警是**正确提示**（ACC_CMD 确实被拒），flasher 会在后续 boot 内自愈，勿当成新故障。
+
+所以：**换设备/全清后看到 panda 掉线或固件告警不要慌，断电重启 1-2 次即自愈**；超过两次断电仍无 panda，按第六节手动程序排查。
 
 ## 八、刷机后 LKAS 相关告警解释（2026-11-19 实测）
 
