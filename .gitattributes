@@ -28,3 +28,7 @@ openpilot/selfdrive/assets/fonts/NotoColorEmoji.ttf -filter -diff -merge binary
 # Panda firmware images ride along in OTA as plain git blobs: the fork's LFS
 # pushurl is read-only, and text/eol normalization must never touch their bytes.
 *.bin.signed -filter -diff -merge -text binary
+
+# BYD build spinner image as a plain git blob: this fork's LFS pushurl points
+# to the upstream HF endpoint (read-only), so new PNGs cannot be pushed to LFS.
+openpilot/sunnypilot/selfdrive/assets/images/spinner_byd_song.png -filter -diff -merge binary
