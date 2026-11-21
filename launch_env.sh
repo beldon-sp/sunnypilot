@@ -20,7 +20,8 @@ if [ -z "$AGNOS_VERSION" ]; then
   # StarPilot explicitly supports comma three (C3/tici) with a custom AGNOS.
   # flash.comma.ai installs the 12.4 baseline; agnos_init then OTA-upgrades to
   # 19.8.1 via the matching tici manifest shipped in agnos.json.
-  export AGNOS_VERSION="19.8.1"
+#  export AGNOS_VERSION="19.8.1"
+  export AGNOS_VERSION="20.6.100"
 fi
 
 # AGNOS rootfs images run weston as the wayland compositor; pyray (spinner, ui)
