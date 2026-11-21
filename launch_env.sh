@@ -16,12 +16,12 @@ export VECLIB_MAXIMUM_THREADS=1
 export QCOM_PRIORITY=12
 
 if [ -z "$AGNOS_VERSION" ]; then
-  # upgrade target: AGNOS 19.8.1 (StarPilot stable), a maintained tici build.
-  # StarPilot explicitly supports comma three (C3/tici) with a custom AGNOS.
-  # flash.comma.ai installs the 12.4 baseline; agnos_init then OTA-upgrades to
-  # 19.8.1 via the matching tici manifest shipped in agnos.json.
-  export AGNOS_VERSION="19.8.1"
-#  export AGNOS_VERSION="20.6.100"
+  # upgrade target: AGNOS 20.6.100, the custom tici build from agnos-builder
+  # that is currently flashed on the device. /VERSION on device reports
+  # exactly "20.6.100", and agnos.json ships the matching 20.6 partition
+  # hashes (boot/system from the official commadist CDN), so the version
+  # check passes and the updater never triggers.
+  export AGNOS_VERSION="20.6.100"
 fi
 
 # AGNOS rootfs images run weston as the wayland compositor; pyray (spinner, ui)
