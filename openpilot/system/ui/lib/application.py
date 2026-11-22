@@ -89,6 +89,10 @@ SCALE = float(os.getenv("SCALE", "1.0"))
 # require the release to land inside the button rect) never fire. reading the
 # panel directly keeps the last valid position on release instead.
 TOUCH_EVENT_DEVICE = os.getenv("TOUCH_EVENT_DEVICE", "/dev/input/by-path/platform-894000.i2c-event")
+# max plausible movement (raw panel px, Manhattan) between two consecutive
+# touch reports while a finger is down. human flicks peak well under this;
+# ghost/outlier samples from the panel jump by hundreds of px at once.
+TOUCH_GLITCH_JUMP = int(os.getenv("TOUCH_GLITCH_JUMP", "300"))
 _EV_SYN, _EV_KEY, _EV_ABS = 0x00, 0x01, 0x03
 _SYN_REPORT = 0
 _ABS_MT_SLOT, _ABS_MT_TRACKING_ID, _ABS_MT_POSITION_X, _ABS_MT_POSITION_Y = 0x2f, 0x39, 0x35, 0x36
@@ -290,6 +294,9 @@ class MouseState:
     slot_down: dict[int, bool] = {}
     last_down: dict[int, bool] = {}
     last_pos: dict[int, MousePos] = {}
+    last_raw: dict[int, tuple[int, int]] = {}
+    glitch_count: dict[int, int] = {}
+    last_glitch_log: dict[int, float] = {}
     cur_slot = 0
 
     def emit(slot: int, pos: MousePos, pressed: bool, released: bool, down: bool, t: float) -> None:
@@ -312,6 +319,23 @@ class MouseState:
         was_down = last_down.get(slot, False)
         raw = slot_raw.get(slot)
         if raw is not None:
+          prev_raw = last_raw.get(slot)
+          if (down and was_down and prev_raw is not None and
+              abs(raw[0] - prev_raw[0]) + abs(raw[1] - prev_raw[1]) > TOUCH_GLITCH_JUMP):
+            # one-shot outlier sample (panel noise): a ghost position that the
+            # next report walks back. widgets integrate every delta they see
+            # (e.g. scroll offset += delta), so a single bad sample leaps the
+            # content and the following sample restores it — "jump then
+            # recover". suppress the jump instead of forwarding it.
+            glitch_count[slot] = glitch_count.get(slot, 0) + 1
+            now = time.monotonic()
+            if now - last_glitch_log.get(slot, 0.0) > 1.0:
+              last_glitch_log[slot] = now
+              cloudlog.warning(
+                f"touch: rejected glitch sample slot={slot} prev={prev_raw} raw={raw} "
+                f"count={glitch_count[slot]} t={t:.3f}")
+            raw = prev_raw
+          last_raw[slot] = raw
           last_pos[slot] = self._to_screen_pos(*raw)
         pos = last_pos.get(slot, MousePos(-1.0, -1.0))
         pressed = down and not was_down
