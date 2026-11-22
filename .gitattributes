@@ -32,3 +32,6 @@ openpilot/selfdrive/assets/fonts/NotoColorEmoji.ttf -filter -diff -merge binary
 # BYD build spinner image as a plain git blob: this fork's LFS pushurl points
 # to the upstream HF endpoint (read-only), so new PNGs cannot be pushed to LFS.
 openpilot/sunnypilot/selfdrive/assets/images/spinner_byd_song.png -filter -diff -merge binary
+# Home button icon ("宋") as a plain git blob, same reason: an edited PNG would
+# create a new LFS object that cannot be pushed to the read-only HF endpoint.
+openpilot/selfdrive/assets/images/button_home.png -filter -diff -merge binary
