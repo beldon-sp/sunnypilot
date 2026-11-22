@@ -244,6 +244,11 @@ class CameraView(Widget):
       if egl_image:
         self.egl_images[idx] = egl_image
       else:
+        # Stale frame from a previous camerad connection (fd already closed
+        # by VisionIpcClient::connect). Drop it instead of retrying every
+        # frame until a fresh buffer arrives; also drop stale EGL images.
+        self.frame = None
+        self._clear_egl_images()
         return
 
     # Update texture dimensions to match current frame
@@ -293,6 +298,9 @@ class CameraView(Widget):
         return False
 
       cloudlog.debug(f"Connected to {self._name} stream: {self._stream_type}, buffers: {self.client.num_buffers}")
+      # Buffer fds were closed on reconnect and indices restart from zero,
+      # so cached EGL images are no longer valid.
+      self._clear_egl_images()
       self._initialize_textures()
       self.available_streams = self.client.available_streams(self._name, block=False)
 
@@ -354,7 +362,9 @@ class CameraView(Widget):
       rl.unload_texture(self.texture_uv)
       self.texture_uv = None
 
-    # Clean up EGL resources
+    self._clear_egl_images()
+
+  def _clear_egl_images(self):
     if COMMA_HARDWARE:
       for data in self.egl_images.values():
         destroy_egl_image(data)
