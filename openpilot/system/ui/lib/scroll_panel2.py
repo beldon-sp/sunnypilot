@@ -6,7 +6,6 @@ from enum import Enum
 from typing import cast
 from openpilot.system.ui.lib.application import gui_app, MouseEvent
 from openpilot.common.hardware import COMMA_HARDWARE
-from openpilot.common.swaglog import cloudlog
 from collections import deque
 
 MIN_VELOCITY = 10  # px/s, changes from auto scroll to steady state
@@ -25,11 +24,6 @@ MAX_SPEED = 10000.0  # px/s
 MAX_FRAME_DT = 0.1  # seconds
 
 DEBUG = os.getenv("DEBUG_SCROLL", "0") == "1"
-# log suspicious drag samples (large per-event delta or velocity) to profile
-# the "content jumps then recovers" glitch; rate-limited per panel instance
-LOG_DELTA = float(os.getenv("SCROLL_LOG_DELTA", "40"))     # px per event
-LOG_VELOCITY = float(os.getenv("SCROLL_LOG_VELOCITY", "4000"))  # px/s
-LOG_INTERVAL = 0.5  # seconds between diagnostic log lines
 
 
 # Weights older (steadier) velocity samples more heavily on release.
@@ -65,7 +59,6 @@ class GuiScrollPanel2:
     self._velocity = 0.0  # pixels per second
     self._velocity_buffer: deque[float] = deque(maxlen=12 if COMMA_HARDWARE else 6)
     self._enabled: bool | Callable[[], bool] = True
-    self._last_diag_log: float = -1.0
 
   def set_enabled(self, enabled: bool | Callable[[], bool]) -> None:
     self._enabled = enabled
@@ -214,9 +207,6 @@ class GuiScrollPanel2:
             high_decel = True
 
         self._velocity = weighted_velocity(self._velocity_buffer)
-        cloudlog.warning(
-          f"scroll2: release vel={self._velocity:.0f}px/s state_buffer={list(self._velocity_buffer)} "
-          f"high_decel={high_decel} low_speed={low_speed} offset={self.get_offset():.1f}")
 
         # If final velocity is below some threshold, switch to steady state too
         low_speed = abs(self._velocity) <= MIN_VELOCITY_FOR_CLICKING * 1.5  # plus some margin
@@ -237,16 +227,6 @@ class GuiScrollPanel2:
         self._velocity = delta_x / delta_t
         self._velocity = max(-MAX_SPEED, min(MAX_SPEED, self._velocity))
         self._velocity_buffer.append(self._velocity)
-
-        # diagnostic: profile suspicious deltas/velocities that could cause the
-        # "content jumps then recovers" glitch (one-shot panel outliers)
-        now = rl.get_time()
-        if abs(delta_x) > LOG_DELTA or abs(self._velocity) > LOG_VELOCITY:
-          if now - self._last_diag_log > LOG_INTERVAL:
-            self._last_diag_log = now
-            cloudlog.warning(
-              f"scroll2: large delta={delta_x:.1f}px dt={delta_t*1000:.1f}ms vel={self._velocity:.0f}px/s "
-              f"pos={mouse_pos:.1f} prev_pos={previous_mouse_pos:.1f} offset={self.get_offset():.1f}")
 
         # rubber-banding: reduce dragging when out of bounds
         # TODO: this drifts when dragging quickly
