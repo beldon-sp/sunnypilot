@@ -216,6 +216,10 @@ class LongitudinalMpc:
     self.dt = dt
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.reset()
+    # 求解失败日志限流时间戳只随实例初始化一次；不能放在 reset() 里——
+    # 失败路径每次都调 reset()，归零会打穿 5s 限流（2026-11-22 实车日志
+    # 45k 条/次的教训），且失败时的 MPC 状态本就应保留用于诊断。
+    self.last_cloudlog_t = 0.0
     self.source = LongitudinalPlanSource.cruise
 
   def reset(self):
@@ -237,7 +241,6 @@ class LongitudinalMpc:
     for i in range(N+1):
       self.solver.set(i, 'x', np.zeros(X_DIM))
 
-    self.last_cloudlog_t = 0
     self.crash_cnt = 0.0
     self.solution_status = 0
     # timers
