@@ -20,6 +20,11 @@ from openpilot.sunnypilot.models.helpers import get_active_bundle
 
 LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
 
+# 2026-11-22 复盘：min() 仲裁无滞回，两源 vTarget 贴近时会 20Hz 乒乓
+# （HUD source 指示抖动 + 源内部滤波器状态被来回重置）。保持带 0.1 m/s：
+# 留守当前源最多比绝对最小目标高 0.36 km/h，安全语义（取更保守目标）不变。
+SOURCE_HYSTERESIS_MS = 0.1
+
 
 class LongitudinalPlannerSP:
   def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP, mpc):
@@ -67,7 +72,10 @@ class LongitudinalPlannerSP:
       LongitudinalPlanSource.speedLimitAssist: (self.sla.output_v_target, self.sla.output_a_target),
     }
 
-    self.source = min(targets, key=lambda k: targets[k][0])
+    best = min(targets, key=lambda k: targets[k][0])
+    if self.source in targets and targets[self.source][0] <= targets[best][0] + SOURCE_HYSTERESIS_MS:
+      best = self.source
+    self.source = best
     self.output_v_target, self.output_a_target = targets[self.source]
 
     # carrot min cap（放在 SLA/SCC 之后，design D2）：权威期 desiredSpeed 吸收所有源；
