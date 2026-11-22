@@ -56,7 +56,7 @@
 
 `sunnypilot/selfdrive/pandad/byd_long_flasher.py` 重写：
 
-1. **DFU 停驻优先**：`PandaDFU.list()` 非空时先处理 dongle——持久状态标记（`/data/persist/byd_long_fw_state`，记录已验证写入的 fw+bootstub sha 对）已匹配则仅 `dfu.reset()` 跳转；否则 DFU 直写配对后跳转并写标记。非 F4 的 DFU 设备一律不碰（归 pandad 打包镜像恢复管）。
+1. **DFU 停驻优先**：`PandaDFU.list()` 非空时先处理 dongle——持久状态标记（首选 `/data/persist/byd_long_fw_state`，不可写时自动落到 `/data/media/0/byd_long_fw_state`；记录已验证写入的 fw+bootstub sha 对，任一候选匹配即算已验证）已匹配则仅 `dfu.reset()` 跳转；否则 DFU 直写配对后跳转并写标记。非 F4 的 DFU 设备一律不碰（归 pandad 打包镜像恢复管）。**2026-11-22 补充**：AGNOS OTA/重刷会把 `/data/persist` 属主重置为 root，comma 写不进 → 改为多候选路径自动 fallback，不再需要手动 `sudo chown`。
 2. **app 模式**：签名一致 → 直接返回（不消耗配额）；不一致 → USB `0xd1` 软进 DFU（有界等待 25s）→ DFU 直写配对 → 跳转 → 有界等待重枚举并验签（20s）。GPIO 路径删除。
 3. 配额逻辑（`/dev/shm` boot_id 标记，每 boot 最多 3 次写操作；跳转不消耗配额）。**2026-11-20 复查修正**：
    - 配额门只能挡"擦写"分支，**绝不能挡 DFU 跳转**——否则配额耗尽时一个已刷好固件对的 dongle 会被永远卡在 DFU，openpilot 起不来（等于复发）。跳转分支在配额检查之前执行。

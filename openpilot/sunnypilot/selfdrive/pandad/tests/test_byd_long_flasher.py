@@ -205,7 +205,7 @@ def isolated(monkeypatch, tmp_path):
   monkeypatch.setattr(m, "cloudlog", log)
   monkeypatch.setattr(m.messaging, "log_from_bytes", fake_log_from_bytes)
   monkeypatch.setattr(m, "_ATTEMPT_MARKER", str(tmp_path / "attempts"))
-  monkeypatch.setattr(m, "_STATE_PATH", str(tmp_path / "fw_state"))
+  monkeypatch.setattr(m, "_STATE_CANDIDATES", [str(tmp_path / "fw_state")])
   monkeypatch.setattr(m, "_flash_attempted", False)
   yield log
 
@@ -343,8 +343,8 @@ def test_dfu_parked_dongle_with_valid_state_is_jumped_not_reflashed(isolated):
   FakeParams.store = {"CarPlatformBundle": {"brand": "byd"}}
   FakeDFU.plugged = True
   # write the marker the way a previous verified flash would have
-  os.makedirs(os.path.dirname(m._STATE_PATH), exist_ok=True)
-  with open(m._STATE_PATH, "w") as f:
+  os.makedirs(os.path.dirname(m._STATE_CANDIDATES[0]), exist_ok=True)
+  with open(m._STATE_CANDIDATES[0], "w") as f:
     f.write(f"{m.FW_SHA256}:{m.BOOTSTUB_SHA256}")
   m.flash_byd_long([])
 
@@ -423,8 +423,8 @@ def test_dfu_parked_dongle_jumps_without_any_byd_params(isolated):
   # DFU park after a verified flash): a marker match is always safe to jump
   FakeParams.store = {}
   FakeDFU.plugged = True
-  os.makedirs(os.path.dirname(m._STATE_PATH), exist_ok=True)
-  with open(m._STATE_PATH, "w") as f:
+  os.makedirs(os.path.dirname(m._STATE_CANDIDATES[0]), exist_ok=True)
+  with open(m._STATE_CANDIDATES[0], "w") as f:
     f.write(f"{m.FW_SHA256}:{m.BOOTSTUB_SHA256}")
 
   m.flash_byd_long([])
@@ -477,8 +477,8 @@ def test_exhausted_quota_still_jumps_a_parked_dongle_with_valid_state(isolated):
   FakeDFU.plugged = True
   with open(m._ATTEMPT_MARKER, "w") as f:
     f.write(str(m.MAX_ATTEMPTS_PER_BOOT))
-  os.makedirs(os.path.dirname(m._STATE_PATH), exist_ok=True)
-  with open(m._STATE_PATH, "w") as f:
+  os.makedirs(os.path.dirname(m._STATE_CANDIDATES[0]), exist_ok=True)
+  with open(m._STATE_CANDIDATES[0], "w") as f:
     f.write(f"{m.FW_SHA256}:{m.BOOTSTUB_SHA256}")
 
   m.flash_byd_long([])
@@ -565,3 +565,42 @@ def test_verify_never_seeing_the_board_fails_bounded(isolated, monkeypatch):
   assert any("did not re-enumerate" in str(r) for r in isolated.records)
   assert any("FAILED" in str(r) for r in isolated.records)
   assert not m._state_matches(), "an unverified flash must not record the state marker"
+
+
+def test_state_marker_falls_back_when_primary_is_unwritable(isolated, monkeypatch, tmp_path):
+  # AGNOS OTA/reflash resets /data/persist ownership to root (observed
+  # 2026-11-22): the marker must land in the comma-writable fallback location
+  # instead, and _state_matches() must find it there - no sudo chown required.
+  primary = tmp_path / "persist" / "byd_long_fw_state"
+  fallback = tmp_path / "media" / "byd_long_fw_state"
+  monkeypatch.setattr(m, "_STATE_CANDIDATES", [str(primary), str(fallback)])
+  os.makedirs(os.path.dirname(primary), exist_ok=True)
+  primary.parent.chmod(0o555)  # unwritable directory like root-owned /data/persist
+
+  assert m._record_state() is None
+  assert not primary.exists(), "must not half-write through an unwritable parent"
+  with open(fallback) as f:
+    assert f.read() == f"{m.FW_SHA256}:{m.BOOTSTUB_SHA256}"
+  assert m._state_matches(), "a fallback marker must count as a verified pair"
+
+  primary.parent.chmod(0o755)  # let the tmp_path cleanup work
+
+
+def test_state_marker_matches_any_candidate(isolated, monkeypatch, tmp_path):
+  # a marker written earlier (e.g. by an old build pointing at the primary, or
+  # by the fallback path) must be honored wherever it lives
+  primary = tmp_path / "persist" / "byd_long_fw_state"
+  fallback = tmp_path / "media" / "byd_long_fw_state"
+  monkeypatch.setattr(m, "_STATE_CANDIDATES", [str(primary), str(fallback)])
+  os.makedirs(os.path.dirname(fallback), exist_ok=True)
+  with open(fallback, "w") as f:
+    f.write(f"{m.FW_SHA256}:{m.BOOTSTUB_SHA256}")
+
+  assert m._state_matches()
+
+  # a stale pair in the primary must not shadow the real thing, but any single
+  # correct match is enough
+  os.makedirs(os.path.dirname(primary), exist_ok=True)
+  with open(primary, "w") as f:
+    f.write("deadbeef:deadbeef")
+  assert m._state_matches()

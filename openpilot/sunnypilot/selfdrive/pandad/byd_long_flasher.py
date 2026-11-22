@@ -75,24 +75,42 @@ FLASH_EXIT_WAIT_S = 20
 # power, so "parked in DFU" can persist across many reboots. The marker records
 # that this exact bootstub+app pair has been verified written, letting a parked
 # dongle be started with a plain DFU jump instead of a full reflash.
-_STATE_PATH = "/data/persist/byd_long_fw_state"
+#
+# /data/persist is preferred (dedicated persist partition), but AGNOS OTA
+# upgrades and reflashes reset its ownership to root:root 0755 (observed
+# 2026-11-22: PermissionError on every boot until a manual sudo chown). The
+# fallback lives under /data/media/0, which is comma-writable by construction
+# on AGNOS (loggerd writes routes there) and survives reboots and OTA upgrades.
+# Write goes to the first writable candidate; a match in ANY candidate counts.
+_STATE_CANDIDATES = [
+  "/data/persist/byd_long_fw_state",
+  "/data/media/0/byd_long_fw_state",
+]
 
 
 def _state_matches() -> bool:
-  try:
-    with open(_STATE_PATH) as f:
-      return f.read().strip() == f"{FW_SHA256}:{BOOTSTUB_SHA256}"
-  except Exception:
-    return False
+  expected = f"{FW_SHA256}:{BOOTSTUB_SHA256}"
+  for path in _STATE_CANDIDATES:
+    try:
+      with open(path) as f:
+        if f.read().strip() == expected:
+          return True
+    except Exception:
+      pass
+  return False
 
 
 def _record_state() -> None:
-  try:
-    os.makedirs(os.path.dirname(_STATE_PATH), exist_ok=True)
-    with open(_STATE_PATH, "w") as f:
-      f.write(f"{FW_SHA256}:{BOOTSTUB_SHA256}")
-  except Exception:
-    cloudlog.exception("BYD flasher: cannot write persistent state marker")
+  for path in _STATE_CANDIDATES:
+    try:
+      os.makedirs(os.path.dirname(path), exist_ok=True)
+      with open(path, "w") as f:
+        f.write(f"{FW_SHA256}:{BOOTSTUB_SHA256}")
+      cloudlog.info(f"BYD flasher: persistent state marker written to {path}")
+      return
+    except Exception:
+      continue
+  cloudlog.exception("BYD flasher: cannot write persistent state marker in any candidate location")
 
 
 # _flash_attempted only lives as long as the pandad.py process. manager.py can
