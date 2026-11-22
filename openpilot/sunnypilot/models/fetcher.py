@@ -10,7 +10,7 @@ import requests
 from requests.exceptions import (SSLError, RequestException, HTTPError)
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
-from openpilot.sunnypilot.models.helpers import is_bundle_version_compatible, mirror_url
+from openpilot.sunnypilot.models.helpers import is_bundle_version_compatible, mirror_candidates
 from openpilot.cereal import custom
 
 
@@ -140,34 +140,45 @@ class ModelFetcher:
   def _fetch_and_cache_models(self, source: str) -> list[custom.ModelManagerSP.ModelBundle] | None:
     """Fetches fresh model data from remote and updates cache.
     Returns None on transport errors. Raises on 404 and other fatal HTTP errors.
+    Tries every mirror host before the original URL; the first host that
+    answers wins (observed 2026-11-22: cdn.jsdelivr.net unreachable from
+    mainland-China networks stranded the whole model catalog on it).
     """
     model_url, _ = self.MODEL_SOURCES[source]
-    try:
-      response = requests.get(mirror_url(model_url, self.params), timeout=10)
+    for candidate in mirror_candidates(model_url, self.params):
+      try:
+        response = requests.get(candidate, timeout=10)
+      except ConnectionError as e:
+        cloudlog.warning(f"DNS/connection error while fetching models from {candidate}: {e}")
+        continue  # try the next mirror host
+      except SSLError as e:
+        cloudlog.warning(f"SSL error while fetching models from {candidate}: {e}")
+        continue
+      except RequestException as e:
+        cloudlog.warning(f"Request transport error while fetching models from {candidate}: {e}")
+        continue
 
-      # Explicitly handle 404 differently
+      # Explicitly handle 404 differently - the URL is authoritative, a 404 is
+      # fatal and must propagate (manager turns it into a surfaced alert)
       if response.status_code == 404:
         cloudlog.error(f"Models URL returned 404 Not Found: {model_url}")
         raise HTTPError(f"404 Not Found: {model_url}", response=response)
 
-      # Raise for any other 4xx/5xx
-      response.raise_for_status()
+      try:
+        # Raise for any other 4xx/5xx
+        response.raise_for_status()
 
-      json_data = response.json()
-      parsed = self.model_parser.parse_models(json_data)
-      if parsed:
-        self.model_caches[source].set(json_data)
-        cloudlog.debug(f"Successfully updated models cache for {source}")
-      return parsed
-
-    except ConnectionError as e:
-      cloudlog.warning(f"DNS/connection error while fetching models: {e}")
-    except SSLError as e:
-      cloudlog.warning(f"SSL error while fetching models: {e}")
-    except RequestException as e:
-      cloudlog.warning(f"Request transport error while fetching models: {e}")
-    except Exception as e:
-      cloudlog.exception(f"Unexpected error fetching models: {e}")
+        json_data = response.json()
+        parsed = self.model_parser.parse_models(json_data)
+        if parsed:
+          self.model_caches[source].set(json_data)
+          cloudlog.debug(f"Successfully updated models cache for {source}")
+        return parsed
+      except HTTPError:
+        raise  # fatal HTTP error, not a host problem
+      except Exception as e:
+        cloudlog.exception(f"Unexpected error fetching models: {e}")
+        return None  # parse/logic failure - other hosts would only repeat it
 
     return None
 

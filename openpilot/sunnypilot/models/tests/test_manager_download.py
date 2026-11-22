@@ -435,6 +435,37 @@ class TestMirrorUrl(OpenpilotTestCase):
     assert mirror_url("https://example.com/model.pkl", self.params(False)) == "https://example.com/model.pkl"
 
 
+class TestMirrorCandidates(OpenpilotTestCase):
+  MANIFEST_URL = "https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/docs/driving_models_chestnut_v28.json"
+  HF_URL = "https://huggingface.co/datasets/sunnypilot/sunnypilot_models_v1/resolve/main/models/m.pkl"
+
+  @staticmethod
+  def params(mirror_disabled: bool):
+    params = mock.MagicMock()
+    params.get_bool.return_value = mirror_disabled
+    return params
+
+  def test_manifest_gets_all_jsdelivr_edges_then_the_original(self):
+    # observed 2026-11-22: cdn.jsdelivr.net was unreachable from the target
+    # device's mainland-China network (900+ transport errors), so a single
+    # mirror host stranded the whole model catalog - the regional jsDelivr
+    # edges must be tried in order before giving up to the original URL
+    candidates = helpers.mirror_candidates(self.MANIFEST_URL, self.params(False))
+    hosts = [c.split("//")[1].split("/")[0] for c in candidates]
+    assert hosts == ["cdn.jsdelivr.net", "gcore.jsdelivr.net", "testingcf.jsdelivr.net",
+                     "fastly.jsdelivr.net", "raw.githubusercontent.com"]
+    assert all(c.endswith("docs/driving_models_chestnut_v28.json") for c in candidates)
+    assert candidates[-1] == self.MANIFEST_URL
+
+  def test_artifacts_and_unknown_hosts_keep_a_single_candidate(self):
+    assert helpers.mirror_candidates(self.HF_URL, self.params(False)) == \
+      [self.HF_URL.replace("https://huggingface.co/", "https://hf-mirror.com/")]
+    assert helpers.mirror_candidates("https://example.com/m.json", self.params(False)) == ["https://example.com/m.json"]
+
+  def test_disabled_mirror_returns_only_the_original(self):
+    assert helpers.mirror_candidates(self.MANIFEST_URL, self.params(True)) == [self.MANIFEST_URL]
+
+
 def manifest_bundle(short_name: str, ref: str, index: int = 0, is_big: bool = False) -> dict:
   return {
     "index": index,
@@ -472,6 +503,69 @@ class TestModelFetcher(OpenpilotTestCase):
   def refetch(self, fetcher, *bundles):
     fetched = fetcher.model_parser.parse_models({"bundles": list(bundles)})
     return mock.patch.object(fetcher, "_fetch_and_cache_models", return_value=fetched)
+
+  @staticmethod
+  def make_fetcher():
+    params = mock.MagicMock()
+    params.get_bool.return_value = False  # mirrors enabled
+    return ModelFetcher(params)
+
+  def test_fetcher_falls_through_to_next_mirror_host(self):
+    # primary mirror down (the 2026-11-22 jsdelivr outage) must not strand the
+    # catalog: the fetch walks the candidate list until a host answers
+    fetcher = self.make_fetcher()
+    manifest = {"bundles": [manifest_bundle("big", "bbb", is_big=True)]}
+    calls = []
+
+    def fake_get(url, timeout):
+      calls.append(url)
+      if url.startswith("https://cdn.jsdelivr.net/"):
+        raise requests.exceptions.ConnectionError("connection reset by peer")
+      resp = mock.MagicMock()
+      resp.status_code = 200
+      resp.raise_for_status = lambda: None
+      resp.json = lambda: manifest
+      return resp
+
+    with mock.patch("openpilot.sunnypilot.models.fetcher.requests.get", side_effect=fake_get):
+      bundles = fetcher._fetch_and_cache_models("chestnut")
+
+    assert bundles, "the second mirror must answer and parse"
+    assert len(calls) == 2, "must stop at the first working host"
+    assert calls[0].startswith("https://cdn.jsdelivr.net/")
+    assert calls[1].startswith("https://gcore.jsdelivr.net/")
+
+  def test_fetcher_returns_none_when_every_host_is_down(self):
+    fetcher = self.make_fetcher()
+    calls = []
+
+    def fake_get(url, timeout):
+      calls.append(url)
+      raise requests.exceptions.ConnectionError("network unreachable")
+
+    with mock.patch("openpilot.sunnypilot.models.fetcher.requests.get", side_effect=fake_get):
+      bundles = fetcher._fetch_and_cache_models("chestnut")
+
+    assert bundles is None
+    assert len(calls) == len(helpers._GHPAGES_MIRROR_HOSTS) + 1, "every candidate incl. the original must be tried"
+
+  def test_fetcher_404_is_fatal_and_not_retried_on_other_hosts(self):
+    # a 404 means the URL is wrong, not the network - retrying other mirrors
+    # would only mask it, so it must propagate immediately
+    fetcher = self.make_fetcher()
+    calls = []
+
+    def fake_get(url, timeout):
+      calls.append(url)
+      resp = mock.MagicMock()
+      resp.status_code = 404
+      return resp
+
+    with mock.patch("openpilot.sunnypilot.models.fetcher.requests.get", side_effect=fake_get):
+      with self.assertRaises(requests.HTTPError):
+        fetcher._fetch_and_cache_models("chestnut")
+
+    assert len(calls) == 1
 
   def test_active_source_follows_chestnut_presence(self):
     assert ModelFetcher.active_source(False) == "qcom"

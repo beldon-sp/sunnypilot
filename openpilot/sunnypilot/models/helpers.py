@@ -36,6 +36,21 @@ _MIRROR_HOST_MAP = {
     "https://cdn.jsdelivr.net/gh/sunnypilot/sunnypilot-models@gh-pages/",
 }
 
+# ordered fallback hosts for the gh-pages manifest. cdn.jsdelivr.net is the
+# primary mirror but is unreliable from mainland-China networks (observed
+# 2026-11-22 on the target device: 900+ consecutive transport errors, every
+# boot reset the active driving-model bundle back to default). The regional
+# jsDelivr edge domains route through different CDNs; the original
+# raw.githubusercontent.com URL stays last. Manifest/artifact payloads are
+# sha256-verified downstream, so host swaps never change what runs.
+_GHPAGES_MIRROR_HOSTS = (
+  "https://cdn.jsdelivr.net/gh/sunnypilot/sunnypilot-models@gh-pages/",
+  "https://gcore.jsdelivr.net/gh/sunnypilot/sunnypilot-models@gh-pages/",
+  "https://testingcf.jsdelivr.net/gh/sunnypilot/sunnypilot-models@gh-pages/",
+  "https://fastly.jsdelivr.net/gh/sunnypilot/sunnypilot-models@gh-pages/",
+)
+_RAW_GHPAGES_PREFIX = "https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/"
+
 
 def mirror_url(url: str, params: Params | None = None) -> str:
   """Rewrites known model hosts to their China-reachable mirrors for download time only"""
@@ -44,6 +59,20 @@ def mirror_url(url: str, params: Params | None = None) -> str:
       if url.startswith(source):
         return mirror + url[len(source):]
   return url
+
+
+def mirror_candidates(url: str, params: Params | None = None) -> list[str]:
+  """Ordered fetch candidates for a model-host URL: every mirror first, the
+  original URL last. Used for manifest fetches where one host being down must
+  not take the whole model catalog with it."""
+  if not url or (params or Params()).get_bool("ModelManager_MirrorDisabled"):
+    return [url]
+  candidates: list[str] = []
+  if url.startswith(_RAW_GHPAGES_PREFIX):
+    tail = url[len(_RAW_GHPAGES_PREFIX):]
+    candidates = [host + tail for host in _GHPAGES_MIRROR_HOSTS]
+    return candidates + [url]
+  return [mirror_url(url, params) or url]
 
 
 def _compute_hash(file_path: str) -> str | None:
