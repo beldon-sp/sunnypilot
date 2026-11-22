@@ -325,9 +325,13 @@ def main(exit_event: threading.Event | None = None):
 
     time.sleep(backoff(conn_retries))
 
-  if not sunnylink_ready(params):
-    cloudlog.debug("Reached end of sunnylinkd.main while sunnylink is not ready. Waiting 60s before retrying")
-    time.sleep(60)
+    # Sunnylink disabled/unregistered mid-session: wait in-process instead of
+    # exiting. Exiting makes manager respawn us (full interpreter + imports
+    # every cycle, ~65s loop observed on tici), burning CPU for nothing.
+    while not exit_event or not exit_event.is_set():
+      if sunnylink_ready(params):
+        break
+      time.sleep(10)
 
 
 if __name__ == "__main__":
