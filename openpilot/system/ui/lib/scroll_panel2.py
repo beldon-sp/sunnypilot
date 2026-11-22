@@ -18,6 +18,11 @@ BOUNCE_RETURN_RATE = 10.0
 SNAP_RATE = 6.3  # matches previous Scroller snapping. exp rate of approach to snap target, 1/s
 REJECT_DECELERATION_FACTOR = 3
 MAX_SPEED = 10000.0  # px/s
+# cap the frame-time used to integrate inertia. after a stall (e.g. a font
+# atlas rebake freezing the render loop for hundreds of ms) the first resumed
+# frame reports a huge frame_time; integrating velocity over it leaps the
+# content by velocity*stall_duration — the "jump then settle" glitch.
+MAX_FRAME_DT = 0.1  # seconds
 
 DEBUG = os.getenv("DEBUG_SCROLL", "0") == "1"
 # log suspicious drag samples (large per-event delta or velocity) to profile
@@ -108,7 +113,7 @@ class GuiScrollPanel2:
       if out_of_bounds and snap_target is None:
         target = max_offset if self.get_offset() > max_offset else min_offset
 
-        dt = rl.get_frame_time() or 1e-6
+        dt = min(rl.get_frame_time(), MAX_FRAME_DT) or 1e-6
         factor = 1.0 - math.exp(-BOUNCE_RETURN_RATE * dt)
 
         dist = target - self.get_offset()
@@ -126,7 +131,7 @@ class GuiScrollPanel2:
         self._state = ScrollState.STEADY
 
       # Update the offset based on the current velocity
-      dt = rl.get_frame_time()
+      dt = min(rl.get_frame_time(), MAX_FRAME_DT)
       self.set_offset(self.get_offset() + self._velocity * dt)  # Adjust the offset based on velocity
       # fast decay in snap mode so velocity yields to the snap pull instead of fighting it
       auto_scroll_tc = AUTO_SCROLL_TC_SNAP if snap_target is not None else AUTO_SCROLL_TC
@@ -141,7 +146,7 @@ class GuiScrollPanel2:
       if abs(dist) < 1:  # finished snap
         self.set_offset(snap_target)
       else:
-        dt = rl.get_frame_time() or 1e-6
+        dt = min(rl.get_frame_time(), MAX_FRAME_DT) or 1e-6
         factor = 1.0 - math.exp(-SNAP_RATE * dt)
         self.set_offset(self.get_offset() + dist * factor)
 

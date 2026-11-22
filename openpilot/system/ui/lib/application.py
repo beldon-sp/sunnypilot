@@ -1004,11 +1004,15 @@ class GuiApplication(GuiApplicationExt):
   def _bake_fallback_font(self, language: str, chars: set[str]) -> rl.Font:
     codepoints = sorted(map(ord, chars))
     codepoint_buffer = rl.ffi.new("int[]", codepoints)
+    bake_start = time.monotonic()
     with as_file(FONT_DIR) as fspath:
       font = rl.load_font_ex((fspath / NOTO_FONTS[language]).as_posix(), 48,
                              rl.ffi.cast("int *", codepoint_buffer), len(codepoints))
     rl.gen_texture_mipmaps(font.texture)
     rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_TRILINEAR)
+    bake_ms = (time.monotonic() - bake_start) * 1e3
+    if bake_ms > 20:
+      cloudlog.warning(f"font rebake: {len(codepoints)} codepoints in {bake_ms:.0f}ms")
     return font
 
   def fallback_font(self, text: str = "") -> rl.Font:
