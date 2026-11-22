@@ -309,7 +309,8 @@ class SelfdriveD:
       self.events_sp.add_from_msg(car_events_sp)
 
       # carrot 导航预警（红绿灯/转向预告/偏航）：carrotNavi 在线时至多注入一条
-      self.carrot_nav_alerts.update(self.sm)
+      # v_ego 显式传入：本类 SM 未订阅 carState（见 navi_alerts 模块头注释）
+      self.carrot_nav_alerts.update(self.sm, CS.vEgo)
       if self.carrot_nav_alerts.event is not None:
         self.events_sp.add(self.carrot_nav_alerts.event)
 

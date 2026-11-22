@@ -1,8 +1,12 @@
 """carrotNavi → 车机导航预警（#2 红绿灯接近 / #5 转向预告 / 偏航提示）。
 
-selfdrived 每帧调用 NaviAlertTracker.update(sm)，命中的事件经 events_sp
+selfdrived 每帧调用 NaviAlertTracker.update(sm, v_ego)，命中的事件经 events_sp
 进入 AlertManager（UI + 声音自动生效）；预警文案在 EVENTS_SP 的 Alert
 回调里从 sm['carrotNavi'] 现算，保证 2Hz 数据驱动而非 100Hz 快照陈旧。
+
+注意：selfdrived 的 SubMaster 不订阅 carState（carState 走独立 raw sock），
+sm['carState'] 会 KeyError——2026-11-22 实车日志确认 mate 推导航时该路径
+导致 selfdrived 崩溃循环，故 v_ego 必须显式传入，本模块禁止访问 sm['carState']。
 
 设计约束（controls-safety 门禁）：
 - fail-open：carrotmate 掉线或数据无效时不出任何事件，UI 行为与现状一致；
@@ -80,7 +84,8 @@ class NaviAlertTracker:
   def __init__(self):
     self.event = None  # EventNameSP enumerant，None = 本帧无预警
 
-  def update(self, sm) -> None:
+  def update(self, sm, v_ego: float) -> None:
+    """v_ego 由调用方显式传入（selfdrived 的 SM 无 carState，见模块头注释）。"""
     self.event = None
     if not _navi_fresh(sm):
       return
@@ -91,8 +96,6 @@ class NaviAlertTracker:
     if status.meta.present and status.offRoute:
       self.event = EventNameSP.carrotNavOffRoute
       return
-
-    v_ego = sm['carState'].vEgo
 
     # 2) 红灯接近：可见且红灯亮、距离在窗口内、本车在接近
     #    （距离口径与闸门一致：严格小于，等于阈值不触发）
