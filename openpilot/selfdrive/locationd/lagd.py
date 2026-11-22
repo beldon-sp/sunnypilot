@@ -22,7 +22,11 @@ BLOCK_NUM_NEEDED = 5
 MOVING_WINDOW_SEC = 60.0
 MIN_OKAY_WINDOW_SEC = 25.0
 MIN_RECOVERY_BUFFER_SEC = 2.0
-MIN_VEGO = 50.0 * CV.MPH_TO_MS
+# 2026-11-22 实车复盘：50mph 门槛把 ~72km/h 的典型巡航全排除，估计器永远
+# unestimated（validBlocks=0），回落 steerActuatorDelay+0.2（BYD=0.5s）。
+# 实测横摆 ~1-1.5Hz 幅度 2-3.6°，与延迟高估的相位过补偿一致。降到 20 m/s
+# 后估计器可在中文高速巡航收敛；数据质量仍由 NCC/confidence/range/std 门把关。
+MIN_VEGO = 20.0
 MIN_ABS_YAW_RATE = 0.0
 MAX_YAW_RATE_SANITY_CHECK = 1.0
 MIN_NCC = 0.95
