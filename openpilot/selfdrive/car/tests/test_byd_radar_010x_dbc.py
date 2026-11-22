@@ -64,7 +64,7 @@ class TestLongDist109:
   def test_raw_b7_twin_is_scale_free(self):
     # MSG_109_B7 shares b7 with LongDist_109 at factor 1: the counts path
     # (carstate.update_radar_gap -> RadarGapMonitor) must never see the
-    # configurable scale (BydRadarDistScale), whatever it is set to
+    # scaled distance (u pinned 0.25, param removed 2026-11-22)
     for raw in (0, 15, 139, 247):
       dat = bytearray(ramp())
       dat[7] = raw

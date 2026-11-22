@@ -10,8 +10,8 @@ from openpilot.cereal import log, custom
 from opendbc.car.structs import car
 
 from openpilot.common.params import Params
-from openpilot.common.raw_params import get_float_param, get_int_param
-from opendbc.car.byd.radar_interface import RADAR_DIST_SCALE_DEFAULT, SLOT_TABLE_DEFAULT, SLOT_TABLE_LEVEL_MAX
+from openpilot.common.raw_params import get_int_param
+from opendbc.car.byd.radar_interface import SLOT_TABLE_DEFAULT, SLOT_TABLE_LEVEL_MAX
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper
 from openpilot.common.swaglog import cloudlog, ForwardingHandler
 
@@ -139,11 +139,12 @@ class Car:
     set_alternative_experience(self.CP, self.CP_SP, self.params)
     set_car_specific_params(self.CP, self.CP_SP, self.params)
 
-    # byd radar runtime tunables (carrot radarcan injection): dist scale +
-    # slot-table level ride the RadarInterface instance; the gap monitor is
-    # scale-free. Defaults live in opendbc.car.byd.radar_interface.
-    if self.CP.brand == "byd" and self.RI is not None and hasattr(self.RI, "radar_dist_scale"):
-      self.RI.radar_dist_scale = get_float_param(self.params, "BydRadarDistScale", RADAR_DIST_SCALE_DEFAULT)
+    # byd radar runtime tunables (carrot radarcan injection): slot-table level
+    # rides the RadarInterface instance; the gap monitor is scale-free and the
+    # dist scale is PINNED at RADAR_DIST_SCALE_DEFAULT (2026-11-22 road test:
+    # 53k radar-vs-vision pairs, ratio=d/(d+1.9) - constant reference offset,
+    # zero proportional error; feet hypothesis rejected, param removed).
+    if self.CP.brand == "byd" and self.RI is not None and hasattr(self.RI, "slot_table_level"):
       self.RI.slot_table_level = min(SLOT_TABLE_LEVEL_MAX,
                                      max(0, get_int_param(self.params, "BydRadarSlotTable", SLOT_TABLE_DEFAULT)))
 

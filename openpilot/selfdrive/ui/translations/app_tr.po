@@ -303,10 +303,6 @@ msgid "BYD Forward Gap Gate"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
-msgid "BYD Radar Distance Scale"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
 msgid "BYD Radar Slot Table"
 msgstr ""
 
@@ -863,10 +859,6 @@ msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/visuals.py
 msgid "Distance"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
-msgid "Distance scale u (meters per radar count) for the BYD 0x109 b7 field. Pinned at 0.25 m/count; adjust only if a measured stop-to-lead gap disagrees. Lane-change gap gating is scale-free and unaffected. Applies at the next card restart."
 msgstr ""
 
 #: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py

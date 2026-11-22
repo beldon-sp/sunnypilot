@@ -178,8 +178,9 @@ class TestCarStateDecode:
 
   def test_b7_counts_scale_free(self):
     # b7 comes from the factor-1 MSG_109_B7 placeholder, never from the
-    # LongDist_109 scaled signal: whatever BydRadarDistScale/dbc factor says,
-    # the monitor must see exact counts (u pinned 0.25 2026-10-19, tunable)
+    # LongDist_109 scaled signal: whatever the dbc factor says,
+    # the monitor must see exact counts (u pinned 0.25, param removed
+    # 2026-11-22)
     cs = self.make_cs()
     b7, presence_bits = 123, 7
     d9 = bytearray(8)

@@ -17,7 +17,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"AthenadRecentlyViewedRoutes", {PERSISTENT, STRING}},
     {"BootCount", {PERSISTENT, INT}},
     {"BydBlinkerStalkSwap", {PERSISTENT, BOOL}},  // 1 = swap L/R stalk detents (Song Plus DM-i, see byd carstate)
-    {"BydRadarDistScale", {PERSISTENT, FLOAT}},  // 0x109 b7 distance scale u [m/count] (default 0.25)
     {"BydRadarGapGate", {PERSISTENT, INT}},      // 0=off, 1=clear-window, 2=+abort, 3=+lane discrimination (byd desire_helper_byd)
     {"BydRadarSlotTable", {PERSISTENT, INT}},    // 0=off, 1=display, 2=control (bus1 67ms slot table layer)
     {"CalibrationParams", {PERSISTENT, BYTES}},

@@ -303,10 +303,6 @@ msgid "BYD Forward Gap Gate"
 msgstr "BYD 前向時距門控"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
-msgid "BYD Radar Distance Scale"
-msgstr "BYD 雷達距離標定"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
 msgid "BYD Radar Slot Table"
 msgstr "BYD 雷達槽位表"
 
@@ -866,10 +862,6 @@ msgstr "顯示車輛當前行駛道路名稱。<br>需先在開放街圖面板�
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/visuals.py
 msgid "Distance"
 msgstr "距離"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
-msgid "Distance scale u (meters per radar count) for the BYD 0x109 b7 field. Pinned at 0.25 m/count; adjust only if a measured stop-to-lead gap disagrees. Lane-change gap gating is scale-free and unaffected. Applies at the next card restart."
-msgstr "BYD 0x109 b7 欄位的距離標度 u（米/雷達計數）。固定為 0.25 米/計數；僅在實測與前車停止間距不符時才調整。變道車距門限與標度無關，不受影響。下次 card 重啟後生效。"
 
 #: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py
 msgid "Do all of my segments get pulled in Firehose Mode?"
