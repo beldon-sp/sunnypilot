@@ -292,15 +292,21 @@ class MouseState:
     last_pos: dict[int, MousePos] = {}
     cur_slot = 0
 
-    def emit(slot: int, pos: MousePos, pressed: bool, released: bool, down: bool) -> None:
-      ev = MouseEvent(pos, slot, pressed, released, down, time.monotonic())
+    def emit(slot: int, pos: MousePos, pressed: bool, released: bool, down: bool, t: float) -> None:
+      ev = MouseEvent(pos, slot, pressed, released, down, t)
       prev = self._prev_mouse_event[slot]
       if prev is None or ev[:-1] != prev[:-1]:
         with self._lock:
           self._events.append(ev)
         self._prev_mouse_event[slot] = ev
 
-    def flush_frame() -> None:
+    def flush_frame(t: float) -> None:
+      # t is the kernel timestamp of the SYN_REPORT that triggered this flush.
+      # using evdev time instead of time.monotonic() matters when a burst of
+      # reports is read at once (thread got descheduled under load): every
+      # event in the burst would otherwise share ~one monotonic timestamp, so
+      # scroll velocity (delta/dt) spikes to absurd values and the inertia
+      # flick leaps the content — the intermittent "jump then settle" glitch.
       for slot in sorted(set(slot_raw) | set(slot_down) | set(last_down)):
         down = slot_down.get(slot, False)
         was_down = last_down.get(slot, False)
@@ -312,7 +318,7 @@ class MouseState:
         released = was_down and not down
         if raw is None and not released:
           continue
-        emit(slot, pos, pressed, released, down)
+        emit(slot, pos, pressed, released, down, t)
         last_down[slot] = down
       for slot in list(slot_raw):
         if not slot_down.get(slot, False):
@@ -332,9 +338,9 @@ class MouseState:
             continue
 
           for i in range(0, len(data) - event_size + 1, event_size):
-            _, _, etype, ecode, evalue = struct.unpack_from(_EVENT_FMT, data, i)
+            ts_sec, ts_usec, etype, ecode, evalue = struct.unpack_from(_EVENT_FMT, data, i)
             if etype == _EV_SYN and ecode == _SYN_REPORT:
-              flush_frame()
+              flush_frame(ts_sec + ts_usec / 1e6)
             elif etype == _EV_ABS:
               if ecode == _ABS_MT_SLOT:
                 # this panel class can advertise up to 10 MT slots; widgets only
