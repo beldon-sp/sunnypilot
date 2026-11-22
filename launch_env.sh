@@ -21,7 +21,7 @@ if [ -z "$AGNOS_VERSION" ]; then
   # exactly "20.6.100", and agnos.json ships the matching 20.6 partition
   # hashes (boot/system from the official commadist CDN), so the version
   # check passes and the updater never triggers.
-  export AGNOS_VERSION="20.6.100"
+  export AGNOS_VERSION="20.6.101"
 fi
 
 # AGNOS rootfs images run weston as the wayland compositor; pyray (spinner, ui)
