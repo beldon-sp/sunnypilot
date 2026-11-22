@@ -93,6 +93,8 @@ TOUCH_EVENT_DEVICE = os.getenv("TOUCH_EVENT_DEVICE", "/dev/input/by-path/platfor
 # touch reports while a finger is down. human flicks peak well under this;
 # ghost/outlier samples from the panel jump by hundreds of px at once.
 TOUCH_GLITCH_JUMP = int(os.getenv("TOUCH_GLITCH_JUMP", "300"))
+# log-only threshold for profiling smaller suspicious deltas (no rejection)
+TOUCH_LOG_DELTA = int(os.getenv("TOUCH_LOG_DELTA", "50"))
 _EV_SYN, _EV_KEY, _EV_ABS = 0x00, 0x01, 0x03
 _SYN_REPORT = 0
 _ABS_MT_SLOT, _ABS_MT_TRACKING_ID, _ABS_MT_POSITION_X, _ABS_MT_POSITION_Y = 0x2f, 0x39, 0x35, 0x36
@@ -335,6 +337,17 @@ class MouseState:
                 f"touch: rejected glitch sample slot={slot} prev={prev_raw} raw={raw} "
                 f"count={glitch_count[slot]} t={t:.3f}")
             raw = prev_raw
+          elif (down and was_down and prev_raw is not None and
+                abs(raw[0] - prev_raw[0]) + abs(raw[1] - prev_raw[1]) > TOUCH_LOG_DELTA):
+            # below the rejection threshold but still suspicious: log-only, to
+            # profile the real size distribution of panel noise
+            glitch_count[slot] = glitch_count.get(slot, 0) + 1
+            now = time.monotonic()
+            if now - last_glitch_log.get(slot, 0.0) > 1.0:
+              last_glitch_log[slot] = now
+              cloudlog.warning(
+                f"touch: large delta sample slot={slot} prev={prev_raw} raw={raw} "
+                f"count={glitch_count[slot]} t={t:.3f}")
           last_raw[slot] = raw
           last_pos[slot] = self._to_screen_pos(*raw)
         pos = last_pos.get(slot, MousePos(-1.0, -1.0))
