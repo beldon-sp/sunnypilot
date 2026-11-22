@@ -214,13 +214,20 @@ def gen_long_ocp():
 class LongitudinalMpc:
   def __init__(self, dt=DT_MDL):
     self.dt = dt
-    self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
+    self.consecutive_fails = 0
+    self._build_solver()
     self.reset()
     # 求解失败日志限流时间戳只随实例初始化一次；不能放在 reset() 里——
     # 失败路径每次都调 reset()，归零会打穿 5s 限流（2026-11-22 实车日志
     # 45k 条/次的教训），且失败时的 MPC 状态本就应保留用于诊断。
     self.last_cloudlog_t = 0.0
     self.source = LongitudinalPlanSource.cruise
+
+  def _build_solver(self):
+    # 2026-11-22 实车复盘：一次 NaN 求解会永久毒化本实例的 acados QP 内存，
+    # reset() 无法恢复（实测 reset 后仍 status 4），只有重建实例可解。
+    # SQP_RTI 重建开销实测 ~2ms（tici），仅在连续失败时触发。
+    self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
 
   def reset(self):
     self.solver.reset()
@@ -272,6 +279,11 @@ class LongitudinalMpc:
     self.set_cost_weights(cost_weights, constraint_cost_weights)
 
   def set_cur_state(self, v, a):
+    # 非有限输入直接丢弃（保持上一帧有限值）：NaN x0 会毒化 acados 求解器且
+    # reset() 无法恢复（2026-11-22 实车复盘，见 process_lead 注释）
+    if not (np.isfinite(v) and np.isfinite(a)):
+      cloudlog.warning("long mpc: dropping non-finite cur state")
+      return
     v_prev = self.x0[1]
     self.x0[1] = v
     self.x0[2] = a
@@ -289,7 +301,12 @@ class LongitudinalMpc:
 
   def process_lead(self, lead):
     v_ego = self.x0[1]
-    if lead is not None and lead.present:
+    # 任何非有限前车量测一律按无前车处理（fail-open）。原因：NaN 进入
+    # x_obstacles 后 acados 求解器会被永久毒化——实测设备上 reset() 无法
+    # 恢复，只能重建求解器实例（见 run()）；BYD 雷达接口的 slot-table
+    # 显示点本就带 NaN vRel，不能让它们进入控车链路。
+    if lead is not None and lead.present and \
+        all(np.isfinite(v) for v in (lead.dRel, lead.vLead, lead.aLeadK, lead.aLeadTau)):
       x_lead = lead.dRel
       v_lead = lead.vLead
       a_lead = lead.aLeadK
@@ -370,6 +387,14 @@ class LongitudinalMpc:
         self.last_cloudlog_t = t
         cloudlog.warning(f"Long mpc reset, solution_status: {self.solution_status}")
       self.reset()
+      self.consecutive_fails += 1
+      if self.consecutive_fails >= 3:
+        cloudlog.warning("long mpc: rebuilding solver after repeated failures")
+        self._build_solver()
+        self.reset()
+        self.consecutive_fails = 0
+    else:
+      self.consecutive_fails = 0
 
 
 if __name__ == "__main__":

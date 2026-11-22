@@ -60,6 +60,15 @@ class Track:
     self.K_A = kalman_params.A
     self.K_C = kalman_params.C
     self.K_K = kalman_params.K
+    self.kf = KF1D([[v_lead if math.isfinite(v_lead) else 0.0], [0.0]], self.K_A, self.K_C, self.K_K)
+    # 2026-11-22 实车复盘：BYD 雷达接口按设计会发布 NaN vRel 的 slot-table 显示点，
+    # 但 NaN 一旦进入 KF1D 就永不自愈（vLeadK/aLeadK 持续 NaN），经 radarState
+    # 传入 longitudinal MPC 后，设备上的 acados 求解器被 NaN 永久毒化
+    # （reset() 无法恢复，见 long_mpc 注释），纵向控制整段失效。
+    # 因此：非有限量测不进 KF，且 KF 一旦被污染立即重建。
+    self._kf = kalman_params
+
+  def _reinit_kf(self, v_lead: float):
     self.kf = KF1D([[v_lead], [0.0]], self.K_A, self.K_C, self.K_K)
 
   def update(self, d_rel: float, y_rel: float, v_rel: float, v_lead: float):
@@ -68,6 +77,17 @@ class Track:
     self.yRel = y_rel   # -LAT_DIST
     self.vRel = v_rel   # REL_SPEED
     self.vLead = v_lead
+
+    if not (math.isfinite(d_rel) and math.isfinite(y_rel) and
+            math.isfinite(v_rel) and math.isfinite(v_lead)):
+      # 显示点保留原始量测值，但量测历史作废（下次有限量测重建 KF）
+      self.cnt = 0
+      self.vLeadK = v_lead if math.isfinite(v_lead) else float(self.kf.x[SPEED][0])
+      self.aLeadK = float(self.kf.x[ACCEL][0])
+      return
+
+    if self.cnt == 0 or not (math.isfinite(self.kf.x[SPEED][0]) and math.isfinite(self.kf.x[ACCEL][0])):
+      self._reinit_kf(v_lead)  # 首帧或 KF 已被污染：重建
 
     # computed velocity and accelerations
     if self.cnt > 0:
@@ -178,6 +198,12 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
       # Only choose new track if it is actually closer than the previous one
       if (not lead_dict['present']) or (closest_track.dRel < lead_dict['dRel']):
         lead_dict = closest_track.get_RadarState()
+
+  # 最后一道门：任何非有限量的 lead 都不得进入 radarState/MPC
+  # （NaN 会永久毒化 acados 求解器，见 long_mpc 注释）
+  if lead_dict.get('present') and not all(
+      math.isfinite(lead_dict.get(k, 0.0)) for k in ('dRel', 'yRel', 'vRel', 'vLead', 'vLeadK', 'aLeadK', 'aLeadTau')):
+    lead_dict = {'present': False}
 
   return lead_dict
 
