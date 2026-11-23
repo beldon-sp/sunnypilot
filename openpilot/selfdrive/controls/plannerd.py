@@ -23,9 +23,13 @@ def main():
   cloudlog.info("plannerd got CarParamsSP")
 
   gps_location_service = get_gps_location_service(params)
-  ignore_services = ["liveMapDataSP", "carStateSP", "selfdriveStateSP", gps_location_service]
-  # carrotNavi 是 2 Hz 常规服务（carrotmate 导航数据）：不在 ignore 列表，
-  # 让 alive/valid 真实反映 carrotmate 在线状态，供 SLC carrot 源新鲜度判定
+  # carrotNavi 是可选的导航增强服务（carrotmate，2Hz，仅导航中稳定发布）。车静止或
+  # carrotmate 未连接时其频率不达标；若参与 all_checks()，会把本进程发布的
+  # longitudinalPlan / driverAssistance 的 valid 置为 False，级联触发 selfdrived 的
+  # commIssue 并阻止 engagement（表现为车机"自适应功能受限"）。导航可用性由各 carrot
+  # 消费者（SLC resolver / navi_alerts / navi_lane_change_gate）自行判定，它们读的是
+  # sm.seen/alive/valid/recv_time 原始字段，不受此 ignore 影响，故豁免是安全的。
+  ignore_services = ["liveMapDataSP", "carStateSP", "selfdriveStateSP", gps_location_service, "carrotNavi"]
 
   ldw = LaneDepartureWarning()
   longitudinal_planner = LongitudinalPlanner(CP, CP_SP)

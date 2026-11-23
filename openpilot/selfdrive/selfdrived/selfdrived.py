@@ -108,7 +108,10 @@ class SelfdriveD:
     # TODO: de-couple selfdrived with card/conflate on carState without introducing controls mismatches
     self.car_state_sock = messaging.sub_sock('carState', timeout=20)
 
-    ignore = self.sensor_packets + self.gps_packets + ['alertDebug', 'lateralManeuverPlan'] + ['modelDataV2SP', 'longitudinalPlanSP']
+    # carrotNavi 是可选导航增强服务（carrotmate，2Hz，仅导航中稳定发布）。车静止或未连接
+    # 时频率不达标，若参与 all_checks() 会持续触发 commIssue 并阻止 engagement。导航源新鲜度
+    # 由各消费者读 sm.seen/alive/valid/recv_time 自行判定，不受此 ignore 影响，故豁免安全。
+    ignore = self.sensor_packets + self.gps_packets + ['alertDebug', 'lateralManeuverPlan'] + ['modelDataV2SP', 'longitudinalPlanSP'] + ['carrotNavi']
     if SIMULATION:
       ignore += ['cabinCameraState', 'managerState']
     if REPLAY:
