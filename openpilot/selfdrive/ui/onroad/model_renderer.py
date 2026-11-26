@@ -1,13 +1,19 @@
 import colorsys
+import math
+
 import numpy as np
 import pyray as rl
 from openpilot.cereal import messaging
 from opendbc.car.structs import car
+from opendbc.car.byd.radar_multitarget import TRACK_ID_BASE as SLOT_TRACK_ID_BASE
+from openpilot.common.constants import CV
 from dataclasses import dataclass, field
 from openpilot.common.params import Params
 from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
+from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 
 from openpilot.selfdrive.ui.sunnypilot.onroad.model_renderer import ChevronMetrics, ModelRendererSP
@@ -15,6 +21,17 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.model_renderer import ChevronMetri
 CLIP_MARGIN = 500
 MIN_DRAW_DISTANCE = 10.0
 MAX_DRAW_DISTANCE = 100.0
+
+# Slot-table multi-target overlay (draw style adapted from carrotpilot
+# external_radar_overlay::drawTargets). Display-only telemetry for the 67ms
+# slot-table points (trackId >= 201); the b7 fused lead (id=1) keeps its own
+# chevron and the tang slots (101+) are empty on this car.
+RADAR_TARGET_MIN_D = 2.5      # m, below this the projection clips into the hood
+RADAR_TARGET_MAX_D = 100.0    # m, beyond the model's usable draw range
+RADAR_TARGET_MAX_Y = 12.0     # m lateral, matching the overlay's sanity band
+RADAR_TARGET_SPEED_MPS = 3.0  # |vRel| above this gets a speed badge, else "*"
+RADAR_COLOR_CLOSING = rl.Color(230, 50, 50, 230)   # closing on us (vRel < -1)
+RADAR_COLOR_AWAY = rl.Color(255, 149, 0, 230)      # same direction / receding
 
 STOCK_PATH_GRADIENT = Gradient(
   start=(0.0, 1.0),
@@ -46,6 +63,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     self._lane_line_probs = np.zeros(4, dtype=np.float32)
     self._road_edge_stds = np.zeros(2, dtype=np.float32)
     self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
+    self._radar_font = gui_app.font(FontWeight.SEMI_BOLD)
     self._path_offset_z = HEIGHT_INIT[0]
     self._counter = -1
     self._camera_offset = ui_state.params.get("CameraOffset", return_default=True) if ui_state.active_bundle else 0.0
@@ -128,6 +146,8 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     if render_lead_indicator and radar_state:
       self._draw_lead_indicator()
       self.chevron_metrics.draw_lead_status(sm, radar_state, self._rect, self._lead_vehicles)
+
+    self._draw_radar_targets()
 
   def _update_raw_points(self, model):
     """Update raw 3D points from model data"""
@@ -296,6 +316,61 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
 
       rl.draw_triangle_fan(lead.glow, len(lead.glow), rl.Color(218, 202, 37, 255))
       rl.draw_triangle_fan(lead.chevron, len(lead.chevron), rl.Color(201, 34, 49, lead.fill_alpha))
+
+  def _draw_radar_targets(self):
+    """Slot-table multi-target overlay: display-only telemetry drawn on the
+    driver camera view. Points come from the radarTracks message (card.py),
+    which already carries the 67ms slot-table tracks (trackId >= 201).
+    Projection reuses the lead path: ground z from the path at the target's
+    distance, then the shared car-space transform. Scissored to the camera
+    rect so badges never leak over the HUD."""
+    sm = ui_state.sm
+    if not sm.valid['radarTracks'] or self._path.raw_points.size == 0:
+      return
+
+    path_x = self._path.raw_points[:, 0]
+    rect = self._rect
+    multiplier = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
+
+    rl.begin_scissor_mode(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
+    for pt in sm['radarTracks'].points:
+      if pt.trackId < SLOT_TRACK_ID_BASE:
+        continue
+      d_rel, y_rel, v_rel = pt.dRel, pt.yRel, pt.vRel
+      if not (math.isfinite(d_rel) and math.isfinite(y_rel)):
+        continue
+      if not (RADAR_TARGET_MIN_D < d_rel <= RADAR_TARGET_MAX_D) or abs(y_rel) > RADAR_TARGET_MAX_Y:
+        continue
+
+      idx = self._get_path_length_idx(path_x, d_rel)
+      z = self._path.raw_points[idx, 2]
+      point = self._map_to_screen(d_rel, -y_rel + self._camera_offset, z + self._path_offset_z)
+      if point is None:
+        continue
+      x, y = point
+
+      has_v = math.isfinite(v_rel)
+      color = RADAR_COLOR_CLOSING if (has_v and v_rel < -1.0) else RADAR_COLOR_AWAY
+      if has_v and abs(v_rel) > RADAR_TARGET_SPEED_MPS:
+        fs, small_fs = 34, 26
+        # speed badge (signed vRel; negative = closing)
+        label = f"{v_rel * multiplier:+.0f}"
+        ts = measure_text_cached(self._radar_font, label, fs, 0)
+        width = max(52, ts.x + 20)
+        rl.draw_rectangle_rounded(rl.Rectangle(x - width / 2, y - 46, width, 46), 0.35, 10, color)
+        rl.draw_text_ex(self._radar_font, label, rl.Vector2(x - ts.x / 2, y - 40), fs, 0, rl.Color(255, 255, 255, 235))
+        # distance below, lateral above (matches the carrotpilot badge layout)
+        dist_label = f"{d_rel:.1f}m" if ui_state.is_metric else f"{d_rel * 3.28084:.1f}ft"
+        lat_label = f"y {y_rel:+.1f}"
+        dts = measure_text_cached(self._radar_font, dist_label, small_fs, 0)
+        lts = measure_text_cached(self._radar_font, lat_label, small_fs, 0)
+        rl.draw_text_ex(self._radar_font, dist_label, rl.Vector2(x - dts.x / 2, y + 8), small_fs, 0, rl.Color(255, 255, 255, 220))
+        rl.draw_text_ex(self._radar_font, lat_label, rl.Vector2(x - lts.x / 2, y - 80), small_fs, 0, rl.Color(255, 255, 255, 200))
+      else:
+        # low/no speed confidence: bare marker (carrotpilot's "*")
+        ts = measure_text_cached(self._radar_font, "*", 40, 0)
+        rl.draw_text_ex(self._radar_font, "*", rl.Vector2(x - ts.x / 2, y - ts.y / 2), 40, 0, rl.Color(255, 255, 255, 220))
+    rl.end_scissor_mode()
 
   @staticmethod
   def _get_path_length_idx(pos_x_array: np.ndarray, path_distance: float) -> int:
