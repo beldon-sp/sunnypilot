@@ -3,7 +3,7 @@
 **源**: `mouxancnb/openpilot`（CNB，sunnypilot/zoompilot carrot 系，2026-11-14/15 上游基线）
 **目标**: 本分支 sunnypilot（BYD 宋PLUS DM-i 2022 分支，基线较旧）
 **日期**: 2026-11-28
-**状态**: **代码已实施**（2026-11-28，commit `059bed4e9`，byd-tici 未推送）。P3 门禁：PC 单测/重建 ✅，replay ❌ 未做，设备 offroad ❌ 未做（设备中途掉线）。所有"已验证"条目均已在本仓库实际代码核对过。
+**状态**: **代码已实施 + 设备 offroad 验证通过**（2026-11-28，commit `059bed4e9` + 竞态修复 `be24525ab`，byd-tici 未推送）。P3 门禁：PC 单测/重建 ✅，设备 offroad ✅，replay ❌ 未做，onroad ❌ 待实车。所有"已验证"条目均已在本仓库实际代码核对过。
 **2026-11-28 设备实测更新**: P1 门控的 `imu_present()` 探测方式已修正（sysfs 探测在本机不可用，见 §3 P1 第 3 条）；本机 C3L 克隆实测有 LSM6DS3 硬件（WHO_AM_I=0x6a），Stage A 对本设备定位维持"IMU 失效兜底"不变。
 
 ---
@@ -25,8 +25,14 @@
 
 **验证状态（P3）**：
 - PC：两套纯数学单测 **19 passed**；`locationd.py` 真实 pose_kf 下 carState 开/关两路 handle_log 均 SUCCESS（rednose cython 已本地构建）；manager 门控 PC 侧 real=True/virtual=False 互补正确。
+- 设备 offroad（2026-11-28 03:0x，ssh 192.168.3.146）**已验证**：
+  - WHO_AM_I 探测逻辑设备实测：0x6a → imu_present=True（真实 sensord 保持优先，虚拟进程永不抢占）。
+  - 设备端 libparams 已重建（clang20 + compile_commands.json 原编译命令，ar 更新 libcommon.a 后重链 libparams_c.so）：两新 key 注册，`VirtualSensordEnabled` 默认 0。
+  - `ChassisYawAvailable` 镜像：无 carParams（offroad 静默）时为 False（正确），向 `carParams` 话题注入 brand='byd' 后 manager 下一拍翻为 True（正确）。注：SubMaster 保留最后一条 carParams，首次 drive 后该参数即使 offroad 也保持 True，无回退问题。
+  - offroad 进程清单确认 sensord/virtualsensord/locationd 均按门控未启动，mapd_manager（chassis_yaw 宿主）正常。
+- **实施期发现并修复的竞态**（commit `be24525ab`，方案未预见）：carParams 只在 onroad 由 card 发布，onroad 切换后镜像可能晚几拍才翻转；locationd 一次性读参会拿 False 锁死整段行程。修复：Python 每 2s、native 每 100 拍（~5s）周期重读。offroad 首拍读 False 无影响（locationd 本就不跑）。
 - Replay（Stage B 开关对比）：**未做**。
-- 设备 offroad：**未做**——SSH 验证时设备中途掉线（192.168.3.146 不通）；已确认设备侧旧库对新 key 报 UnknownKeyName（符合预期，部署含重建 libparams 后消失）。
+- Onroad（Stage B 默认关先验证"关=无影响"→ 开参 → 短途实车）：**待实车**。设备端 locationd 二进制未重编（native 补丁随下次 release 构建生效；本机设备跑的是 Python locationd，不受影响）。
 
 ---
 
@@ -153,7 +159,7 @@ openpilot/common/params_keys.h                    # 两个新 key
      `real_sensord` / `virtual_sensord` 严格互补（源库实现原样）。
 4. 契约测试 `test_virtual_sensord_contract.py`：原样拷贝（本地 params/process_config 行号引用需微调）。
 
-### P3 — 测试与验证门禁（不跳步）⏳ 第 1 步已过，2-5 未做
+### P3 — 测试与验证门禁（不跳步）⏳ 第 1、3 步已过，2、4、5 待做（见 §0 验证状态）
 1. **PC**：两个纯数学单测套件全绿（无 msgq 依赖）。
 2. **Replay**：
    - Stage B：开关对比，KF 无发散、无 reset 风暴、gyro-camodo 交叉校验无 INPUT_INVALID 计数上涨（重点看急弯 + 模型输出滞后的时刻）。
