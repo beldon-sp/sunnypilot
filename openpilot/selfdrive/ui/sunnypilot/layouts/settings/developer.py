@@ -91,22 +91,22 @@ class DeveloperLayoutSP(DeveloperLayout):
     self._params = Params()
     self.byd_blinker_stalk_swap_toggle = toggle_item_sp(
       tr("BYD Blinker Stalk Swap"),
-      BYD_DESCRIPTIONS['blinker_stalk_swap'],
+      tr(BYD_DESCRIPTIONS['blinker_stalk_swap']),
       param="BydBlinkerStalkSwap",
     )
 
     self.byd_gap_gate_item = multiple_button_item_sp(
       tr("BYD Forward Gap Gate"),
-      BYD_DESCRIPTIONS['byd_gap_gate'],
-      buttons=["Off", "Level 1", "Level 2", "Level 3 (lane)"],
+      tr(BYD_DESCRIPTIONS['byd_gap_gate']),
+      buttons=[lambda: tr("Off"), lambda: tr("Level 1"), lambda: tr("Level 2"), lambda: tr("Level 3 (lane)")],
       selected_index=self._byd_int_param_index(BYD_GAP_GATE_PARAM, BYD_GAP_GATE_DEFAULT, BYD_GAP_GATE_CHOICES),
       param=BYD_GAP_GATE_PARAM,
     )
 
     self.byd_slot_table_item = multiple_button_item_sp(
       tr("BYD Radar Slot Table"),
-      BYD_DESCRIPTIONS['byd_slot_table'],
-      buttons=["Off", "Display", "Control"],
+      tr(BYD_DESCRIPTIONS['byd_slot_table']),
+      buttons=[lambda: tr("Off"), lambda: tr("Display"), lambda: tr("Control")],
       selected_index=self._byd_int_param_index(BYD_SLOT_TABLE_PARAM, BYD_SLOT_TABLE_DEFAULT, BYD_SLOT_TABLE_CHOICES),
       param=BYD_SLOT_TABLE_PARAM,
     )

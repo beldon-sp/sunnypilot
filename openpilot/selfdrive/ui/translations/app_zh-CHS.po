@@ -282,6 +282,10 @@ msgstr "自动调整为上一限速"
 msgid "Auto adjusting to speed limit"
 msgstr "自动调整为道路限速"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Auto lane change"
+msgstr "自动变道"
+
 #: openpilot/sunnypilot/selfdrive/selfdrived/events.py
 msgid "Automatic Lane Centering is OFF"
 msgstr "自动车道居中已关闭"
@@ -289,6 +293,18 @@ msgstr "自动车道居中已关闭"
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "BRAKE!"
 msgstr "刹车！"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "BSD radar"
+msgstr "BSD 雷达"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "BSM delay"
+msgstr "BSM 延迟阻断"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "BSM delay needs a timed lane change mode"
+msgstr "BSM 延迟需延迟变道模式"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
 msgid "BYD 67ms multi-target slot table. 0 = off (b7-only). 1 = display: multi-target points feed the UI/telemetry only. 2 = control: quality-gated slot points may become lead candidates. Applies at the next card restart."
@@ -379,6 +395,10 @@ msgstr "大模型不可用，下次行驶前由 {} 驾驶。"
 msgid "Blendful (Alpha)"
 msgstr "Blendful（Alpha）"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Blind spot"
+msgstr "盲点状态"
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
 msgid "Block Lane Change: Road Edge Detection"
 msgstr "阻止变道：路沿检测"
@@ -402,6 +422,10 @@ msgstr "底部"
 #: openpilot/sunnypilot/selfdrive/selfdrived/events.py
 msgid "Brake Hold Active"
 msgstr "自动驻车已启用"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Branch / commit"
+msgstr "分支 / 提交"
 
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "CAN Bus Disconnected"
@@ -531,6 +555,10 @@ msgstr "车辆无法识别"
 msgid "Car in Blindspot"
 msgstr "盲区有车"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Car model"
+msgstr "适配车型"
+
 #: openpilot/system/ui/widgets/network.py
 msgid "Cellular Metered"
 msgstr "蜂窝计量"
@@ -563,6 +591,10 @@ msgstr "选择在 sunnypilot 中手动踩下制动踏板后，自动车道居中
 #: openpilot/system/ui/sunnypilot/widgets/sunnylink_pairing_dialog.py
 msgid "Choose your sponsorship tier and confirm your support"
 msgstr "选择赞助等级并确认您的支持"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Clear"
+msgstr "无来车"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 msgid "Clear Cache"
@@ -626,6 +658,10 @@ msgstr "继续"
 #: openpilot/system/ui/tici_setup.py
 msgid "Continue without Wi-Fi"
 msgstr "不连接 Wi-Fi 继续"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "Control"
+msgstr "控制"
 
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Controls Mismatch"
@@ -735,6 +771,7 @@ msgstr "拒绝"
 msgid "Decline, uninstall sunnypilot"
 msgstr "拒绝并卸载 sunnypilot"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/display.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/torque_settings.py
@@ -748,6 +785,10 @@ msgstr "默认：设备正常启动/唤醒，随时可以接管。"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering.py
 msgid "Delay before lateral control resumes after the turn signal ends."
 msgstr "转向灯关闭后，横向控制恢复前的延迟时间。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Detected"
+msgstr "检测到来车"
 
 #: openpilot/selfdrive/ui/layouts/settings/settings.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
@@ -795,6 +836,10 @@ msgstr "关闭 sunnypilot 纵向控制（alpha）开关，以启用智能巡航�
 msgid "Disable your car's stock LKAS to engage"
 msgstr "请关闭车辆原厂 LKAS 后启用"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Disabled"
+msgstr "未启用"
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/mads_settings.py
 msgid "Disengage"
 msgstr "脱离"
@@ -823,6 +868,7 @@ msgstr "脱离以重置校准"
 msgid "Disengage: ALC will disengage when the brake pedal is pressed."
 msgstr "脱离：踩下制动踏板时，ALC 立即脱离。"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
 msgid "Display"
 msgstr "显示"
@@ -1218,7 +1264,6 @@ msgid "Finish Setup"
 msgstr "完成设置"
 
 #: openpilot/selfdrive/ui/layouts/settings/settings.py
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
 msgid "Firehose"
 msgstr "数据洪流"
 
@@ -1326,6 +1371,10 @@ msgstr "良好"
 msgid "Gas: {}%, Steer: {}%"
 msgstr "油门：{}%，转向：{}%"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
+msgid "Gate blinker lane changes with carrotmate navigation guidance near turns, ramps, and crossroads."
+msgstr "拨杆变道结合 carrotmate 导航先验进行许可判断：临近转向、匝道与路口时抑制变道发起；导航不可用时自动退回普通行为。"
+
 #: openpilot/selfdrive/selfdrived/events.py
 #: openpilot/sunnypilot/selfdrive/selfdrived/events.py
 msgid "Gear not D"
@@ -1394,6 +1443,10 @@ msgstr "如果你想继续，之后可使用 https://flash.comma.ai 将设备恢
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 msgid "If you're driving at 20 mph (32 km/h) or below and have your blinker on, the car will plan a turn in that direction at the nearest drivable path. This prevents situations (like at red lights) where the car might plan the wrong turn direction."
 msgstr "车速在 20 mph（32 km/h）及以下且转向灯开启时，车辆将按最近的可行驶路径向该方向规划转弯。可避免（如红灯路口）车辆规划错误转向方向的情况。"
+
+#: openpilot/sunnypilot/selfdrive/selfdrived/events.py
+msgid "In {} m, {}"
+msgstr "前方 {} 米，{}"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
 msgid "Info"
@@ -1487,6 +1540,10 @@ msgstr "无法变道：检测到道路边缘"
 msgid "Lane Departure Detected"
 msgstr "检测到车道偏离"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Lane change status"
+msgstr "变道状态"
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
 msgid "Last checked {}"
 msgstr "最后检查：{}"
@@ -1515,6 +1572,18 @@ msgstr "自调校宽松设置（Beta）"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/torque_settings.py
 msgid "Less strict settings when using Self-Tune. This allows torqued to be more forgiving when learning values."
 msgstr "自学习时使用较宽松设置，使 torqued 在学习参数时更宽容。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "Level 1"
+msgstr "1 级"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "Level 2"
+msgstr "2 级"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "Level 3 (lane)"
+msgstr "3 级（车道）"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 msgid "Live Learning Steer Delay"
@@ -1560,6 +1629,10 @@ msgstr "内存不足"
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Low Memory: Reboot Your Device"
 msgstr "内存不足：请重启设备"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Low-speed lane change"
+msgstr "低速转向变道"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla.py
 msgid "MADS Screen Activation"
@@ -1631,6 +1704,10 @@ msgstr "英里"
 msgid "Minimum Speed to Pause Lateral Control"
 msgstr "暂停横向控制的最低车速"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Model"
+msgstr "模型"
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 msgid "Model Status"
 msgstr "模型状态"
@@ -1686,6 +1763,10 @@ msgstr "未找到用户“{}”的 SSH 密钥"
 msgid "No custom software found at this URL."
 msgstr "此 URL 下未找到自定义软件。"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "No data"
+msgstr "无数据"
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 #: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
 msgid "No models are available for this hardware yet. Connect to the internet and refresh the model list."
@@ -1727,6 +1808,10 @@ msgstr "未配对"
 msgid "Not Sponsor"
 msgstr "非赞助者"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Not available"
+msgstr "不可用"
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/platform_selector.py
 msgid "Not fingerprinted or manually selected"
 msgstr "未识别指纹也未手动选择"
@@ -1747,10 +1832,12 @@ msgstr "注意：通过 UEM 启用横向控制后，将保持启用，直到通�
 msgid "Note: Setting this to Off will reset your MADS settings to default."
 msgstr "注意：设为关闭会重置 MADS 为默认设置。"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
 msgid "Nudge"
 msgstr "轻推"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
 msgid "Nudgeless"
 msgstr "无需轻推"
@@ -1775,13 +1862,19 @@ msgstr "在线"
 msgid "OSM"
 msgstr "OSM"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/hyundai.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/visuals.py
 msgid "Off"
 msgstr "关"
+
+#: openpilot/sunnypilot/selfdrive/selfdrived/events.py
+msgid "Off route"
+msgstr "偏离路线"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
 msgid "Off: Disables the Speed Limit functions."
@@ -1798,6 +1891,14 @@ msgstr "离路"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
 msgid "Offroad: Device will be in Always Offroad mode after boot/wake-up."
 msgstr "离路：设备启动/唤醒后将进入始终离线模式。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "On"
+msgstr "开"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Online"
+msgstr "在线"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 msgid "Only available when vehicle is off, or always offroad mode is on"
@@ -1818,6 +1919,14 @@ msgstr "行驶中上传"
 #: openpilot/selfdrive/ui/widgets/setup.py
 msgid "Open"
 msgstr "打开"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Open steering settings"
+msgstr "转向与变道设置"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Open visuals settings"
+msgstr "盲点与显示设置"
 
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Out of Storage"
@@ -1872,6 +1981,7 @@ msgstr "将设备配对到您的 comma 账号"
 msgid "Pair your device with comma connect (connect.comma.ai) and claim your comma prime offer."
 msgstr "将设备与 comma connect（connect.comma.ai）配对，领取您的 comma prime 优惠。"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
 msgid "Paired"
 msgstr "已配对"
@@ -2045,6 +2155,10 @@ msgstr "雷达暂时不可用"
 msgid "Re-enter the \"sunnylink\" panel to verify sponsorship status"
 msgstr "重新进入“sunnylink”面板以验证赞助状态"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Read-only snapshot, change in settings"
+msgstr "只读快照，修改请进入设置"
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/torque_settings.py
 msgid "Real-Time & Offline"
 msgstr "实时与离线"
@@ -2097,6 +2211,10 @@ msgstr "录制并上传麦克风音频"
 msgid "Record and store microphone audio while driving. The audio will be included in the dashcam video in comma connect."
 msgstr "行驶时录制并保存麦克风音频。音频将包含在 comma connect 的行车记录视频中。"
 
+#: openpilot/sunnypilot/selfdrive/selfdrived/events.py
+msgid "Red light ahead, {} m"
+msgstr "前方 {} 米红灯"
+
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Reflash the byd panda bin or disable AlphaLongitudinal"
 msgstr "重刷 byd panda bin 或关闭 AlphaLongitudinal"
@@ -2142,6 +2260,10 @@ msgstr "检测到设备被重新安装：重新校准中"
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Remount Device (Pitch: {:.1f}°, Yaw: {:.1f}°)"
 msgstr "请重新安装设备（俯仰：{:.1f}°，偏航：{:.1f}°）"
+
+#: openpilot/sunnypilot/selfdrive/selfdrived/events.py
+msgid "Replanning, guided lane changes released"
+msgstr "正在重新规划路线，已解除导航变道引导"
 
 #: openpilot/selfdrive/ui/widgets/ssh_key.py
 msgid "Request timed out"
@@ -2229,6 +2351,10 @@ msgstr "右侧与底部"
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Risk of Collision"
 msgstr "有碰撞风险"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Road edge block"
+msgstr "路沿阻断变道"
 
 #: openpilot/selfdrive/ui/layouts/settings/software.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
@@ -2587,6 +2713,18 @@ msgstr "走走停停破解 (Alpha)"
 msgid "Stop and Go for Manual Parking Brake (Beta)"
 msgstr "手动驻车制动走走停停（Beta）"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Storage"
+msgstr "存储"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Sunnylink"
+msgstr "Sunnylink"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Supported"
+msgstr "已支持"
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
 msgid "Swap the left/right turn-signal stalk detents (1 = exchange). Only for a stalk that reads the opposite way; the Song Plus DM-i is confirmed correct with the default. Takes effect at the next ignition."
 msgstr "交换左右转向灯拨杆挡位（1 = 互换）。仅适用于读向相反的拨杆；Song Plus DM-i 已确认默认方向正确。下次点火后生效。"
@@ -2647,6 +2785,10 @@ msgstr "TSS2 平顺纵向控制（Alpha）"
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Take Control"
 msgstr "请接管"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home.py
+msgid "Tap to view"
+msgstr "点击查看"
 
 #: openpilot/selfdrive/ui/layouts/settings/software.py
 msgid "Target Branch"
@@ -2759,10 +2901,6 @@ msgstr "请开关一次原厂 LKAS 后启用"
 msgid "Toggle to enable a delay timer for seamless lane changes when blind spot monitoring (BSM) detects a obstructing vehicle, ensuring safe maneuvering."
 msgstr "当盲点监测 (BSM) 检测到障碍车辆时启用延迟计时器，以确保安全变道。"
 
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
-msgid "Gate blinker lane changes with carrotmate navigation guidance near turns, ramps, and crossroads."
-msgstr "拨杆变道结合 carrotmate 导航先验进行许可判断：临近转向、匝道与路口时抑制变道发起；导航不可用时自动退回普通行为。"
-
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
 msgid "Toggle visibility of advanced sunnypilot controls.<br>This only changes the visibility of the toggles; it does not change the actual enabled/disabled state."
 msgstr "切换 sunnypilot 高级控件的显示。<br>这只改变开关的可见性，不改变其实际启用/禁用状态。"
@@ -2799,10 +2937,6 @@ msgstr "请轻抚方向盘：未检测到人脸"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
 msgid "Training Guide"
 msgstr "训练指南"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
-msgid "Trips"
-msgstr "行程"
 
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Turn Exceeds Steering Limit"
@@ -2854,12 +2988,17 @@ msgid "Uninstall"
 msgstr "卸载"
 
 #: openpilot/selfdrive/ui/layouts/sidebar.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
 msgid "Unknown"
 msgstr "未知"
 
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Unknown Vehicle Variant"
 msgstr "未知车辆型号"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Unpaired"
+msgstr "未配对"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/platform_selector.py
 msgid "Unrecognized Vehicle"
@@ -2868,6 +3007,10 @@ msgstr "未识别车辆"
 #: openpilot/system/ui/tici_updater.py
 msgid "Update Required"
 msgstr "需要更新"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home.py
+msgid "Update available"
+msgstr "有可用更新"
 
 #: openpilot/system/ui/tici_updater.py
 msgid "Update failed"
@@ -2927,6 +3070,10 @@ msgstr "查看"
 msgid "Vehicle"
 msgstr "车辆"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Vehicle & version"
+msgstr "车辆与版本"
+
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Vehicle Sensors Calibrating"
 msgstr "车辆传感器校准中"
@@ -2938,6 +3085,10 @@ msgstr "车辆传感器无效"
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Vehicle Steering Time Limit"
 msgstr "转向介入时间已达上限"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Version"
+msgstr "版本"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
 msgid "View the error log for sunnypilot crashes."
@@ -3385,6 +3536,7 @@ msgstr "恢复中"
 msgid "right"
 msgstr "右"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
 msgid "s"
 msgstr "秒"
@@ -3615,164 +3767,4 @@ msgstr "已用 {}%"
 #: openpilot/selfdrive/ui/widgets/prime.py
 msgid "✓ SUBSCRIBED"
 msgstr "已订阅"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Vehicle & version"
-msgstr "车辆与版本"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Lane change quick settings"
-msgstr "变道快捷设置"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Car model"
-msgstr "适配车型"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Version"
-msgstr "版本"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Branch / commit"
-msgstr "分支 / 提交"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "BSM support"
-msgstr "盲点监测"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Blind spot"
-msgstr "盲点状态"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Temperature"
-msgstr "温度"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Vehicle connection"
-msgstr "车辆连接"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Supported"
-msgstr "已支持"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Not available"
-msgstr "不可用"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Detected"
-msgstr "检测到来车"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Clear"
-msgstr "无来车"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Normal"
-msgstr "正常"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "High"
-msgstr "偏高"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Connected"
-msgstr "已连接"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Not connected"
-msgstr "未连接"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Offline"
-msgstr "离线"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Auto lane change"
-msgstr "自动变道"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "BSM delay"
-msgstr "BSM 延迟阻断"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Low-speed lane change"
-msgstr "低速转向变道"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "More lane change settings"
-msgstr "更多变道设置"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "On"
-msgstr "开"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Tap to change, takes effect in ~1s"
-msgstr "点击切换，约 1 秒后生效"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "BSM delay needs a timed lane change mode"
-msgstr "BSM 延迟需延迟变道模式"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "BSD radar"
-msgstr "BSD 雷达"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Online"
-msgstr "在线"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "No data"
-msgstr "无数据"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Model"
-msgstr "模型"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Storage"
-msgstr "存储"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Sunnylink"
-msgstr "Sunnylink"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Unpaired"
-msgstr "未配对"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Disabled"
-msgstr "未启用"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home.py
-msgid "Update available"
-msgstr "有可用更新"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home.py
-msgid "Tap to view"
-msgstr "点击查看"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Lane change status"
-msgstr "变道状态"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Read-only snapshot, change in settings"
-msgstr "只读快照，修改请进入设置"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Road edge block"
-msgstr "路沿阻断变道"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Open steering settings"
-msgstr "转向与变道设置"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
-msgid "Open visuals settings"
-msgstr "盲点与显示设置"
 

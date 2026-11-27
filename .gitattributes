@@ -35,3 +35,7 @@ openpilot/sunnypilot/selfdrive/assets/images/spinner_byd_song.png -filter -diff 
 # Home button icon ("宋") as a plain git blob, same reason: an edited PNG would
 # create a new LFS object that cannot be pushed to the read-only HF endpoint.
 openpilot/selfdrive/assets/images/button_home.png -filter -diff -merge binary
+# Training guide slides as plain git blobs, same reason: the zh step*.png set
+# (~14MB) would create new LFS objects that cannot be pushed to the read-only
+# HF endpoint (observed 502 on batch upload).
+openpilot/selfdrive/assets/training/*.png -filter -diff -merge binary

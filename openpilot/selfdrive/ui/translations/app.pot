@@ -976,7 +976,6 @@ msgid "Software"
 msgstr ""
 
 #: openpilot/selfdrive/ui/layouts/settings/settings.py
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
 msgid "Firehose"
 msgstr ""
 
@@ -1230,6 +1229,7 @@ msgid "OFFLINE"
 msgstr ""
 
 #: openpilot/selfdrive/ui/layouts/sidebar.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
 msgid "Unknown"
 msgstr ""
 
@@ -1377,6 +1377,159 @@ msgstr ""
 msgid "Reboot Device"
 msgstr ""
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home.py
+msgid "Tap to view"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home.py
+msgid "Update available"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/hyundai.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/visuals.py
+msgid "Off"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
+msgid "Nudge"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
+msgid "Nudgeless"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/display.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/torque_settings.py
+msgid "Default"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Not available"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Clear"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Disabled"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
+msgid "Paired"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Unpaired"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Vehicle & version"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "On"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Lane change status"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Read-only snapshot, change in settings"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
+msgid "s"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Car model"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Version"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Branch / commit"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "BSD radar"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Blind spot"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Model"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Sunnylink"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Storage"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Open steering settings"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Open visuals settings"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Auto lane change"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "BSM delay"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Road edge block"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Low-speed lane change"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "BSM delay needs a timed lane change mode"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Supported"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Detected"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "Online"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/home_cards.py
+msgid "No data"
+msgstr ""
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/onboarding.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
 #: openpilot/selfdrive/ui/sunnypilot/mici/layouts/settings.py
@@ -1512,14 +1665,6 @@ msgid "Speed Limit Source"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/hyundai.py
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla.py
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/visuals.py
-msgid "Off"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
 msgid "Info"
 msgstr ""
 
@@ -1584,10 +1729,6 @@ msgid "Swap the left/right turn-signal stalk detents (1 = exchange). Only for a 
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
-msgid "Distance scale u (meters per radar count) for the BYD 0x109 b7 field. Pinned at 0.25 m/count; adjust only if a measured stop-to-lead gap disagrees. Lane-change gap gating is scale-free and unaffected. Applies at the next card restart."
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
 msgid "BYD forward-gap lane-change gate. 0 = off (factory behavior). 1 = a closing forward gap blocks a lane-change start. 2 = also abort a started change when a NEW target closes in. 3 = lane-aware: adjacent-lane closings are telemetry only (own-lane closings keep the level-2 behavior; without lateral data everything stays at level 2). Applies on next card restart."
 msgstr ""
 
@@ -1628,10 +1769,6 @@ msgid "BYD Blinker Stalk Swap"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
-msgid "BYD Radar Distance Scale"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
 msgid "BYD Forward Gap Gate"
 msgstr ""
 
@@ -1665,6 +1802,27 @@ msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
 msgid "Quickboot mode requires updates to be disabled.<br>Enable 'Disable Updates' in the Software panel first."
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "Level 1"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "Level 2"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "Level 3 (lane)"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
+msgid "Display"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "Control"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
@@ -1757,12 +1915,6 @@ msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
 msgid "h"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/display.py
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/torque_settings.py
-msgid "Default"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
@@ -2101,15 +2253,7 @@ msgid "Visuals"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
-msgid "Display"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
 msgid "OSM"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
-msgid "Trips"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
@@ -2210,23 +2354,19 @@ msgid "Toggle to enable a delay timer for seamless lane changes when blind spot 
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
+msgid "Navi-Guided Lane Change"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
+msgid "Gate blinker lane changes with carrotmate navigation guidance near turns, ramps, and crossroads."
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
 msgid "Block Lane Change: Road Edge Detection"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
 msgid "Blocks the lane change if the model sees a road edge on your signaled side."
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
-msgid "Nudge"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
-msgid "Nudgeless"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
-msgid "s"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/mads_settings.py
@@ -2371,10 +2511,6 @@ msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
 msgid "Not Sponsor"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
-msgid "Paired"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
@@ -3179,6 +3315,14 @@ msgid "No SSH keys found for user '{}'"
 msgstr ""
 
 #: openpilot/sunnypilot/selfdrive/selfdrived/events.py
+msgid "Off route"
+msgstr ""
+
+#: openpilot/sunnypilot/selfdrive/selfdrived/events.py
+msgid "Replanning, guided lane changes released"
+msgstr ""
+
+#: openpilot/sunnypilot/selfdrive/selfdrived/events.py
 msgid "Adjusting to {} {} speed limit"
 msgstr ""
 
@@ -3237,6 +3381,14 @@ msgstr ""
 
 #: openpilot/sunnypilot/selfdrive/selfdrived/events.py
 msgid "Big Model Ready"
+msgstr ""
+
+#: openpilot/sunnypilot/selfdrive/selfdrived/events.py
+msgid "Red light ahead, {} m"
+msgstr ""
+
+#: openpilot/sunnypilot/selfdrive/selfdrived/events.py
+msgid "In {} m, {}"
 msgstr ""
 
 #: openpilot/sunnypilot/selfdrive/selfdrived/events.py
