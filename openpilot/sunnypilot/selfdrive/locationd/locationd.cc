@@ -26,6 +26,9 @@ const double RESET_TRACKER_DECAY = 0.99995;
 const double DECAY = 0.9993; // ~10 secs to resume after a bad input
 const double MAX_FILTER_REWIND_TIME = 0.8; // s
 const double YAWRATE_CROSS_ERR_CHECK_FACTOR = 30;
+// Chassis yaw yaw-only observation（镜像 Python locationd）。
+const double CHASSIS_YAW_OBS_MASK_R = 1e6;  // masks roll/pitch, no cond issues
+const double CHASSIS_YAW_OBS_STD = 0.05;  // rad/s, needs L3 tuning
 
 // TODO: GPS sensor time offsets are empirically calculated
 // They should be replaced with synced time from a real clock
@@ -447,6 +450,21 @@ void Localizer::handle_car_state(double current_time, const cereal::CarState::Re
     this->kf->predict_and_observe(current_time, OBSERVATION_NO_ROT, { Vector3d(0.0, 0.0, 0.0) });
     this->kf->predict_and_observe(current_time, OBSERVATION_NO_ACCEL, { Vector3d(0.0, 0.0, 0.0) });
   }
+
+  // Chassis yaw rate（ESC，vehicle-frame yaw-up，rad/s）。Python locationd
+  // 观测的 native 镜像：vehicle yaw 旋入 device 帧后经 per-call R 屏蔽
+  // roll/pitch，注入 yaw-only PHONE_GYRO 观测。
+  if (this->chassis_yaw_available) {
+    Vector3d yaw_rate_calib(0.0, 0.0, -log.getYawRate());
+    Vector3d yaw_rate_device = this->device_from_calib * yaw_rate_calib;
+    if (yaw_rate_device.norm() < ROTATION_SANITY_CHECK) {
+      MatrixXdr chassis_R = MatrixXdr::Identity(3, 3);
+      chassis_R(0, 0) = CHASSIS_YAW_OBS_MASK_R;
+      chassis_R(1, 1) = CHASSIS_YAW_OBS_MASK_R;
+      chassis_R(2, 2) = CHASSIS_YAW_OBS_STD * CHASSIS_YAW_OBS_STD;
+      this->kf->predict_and_observe(current_time, OBSERVATION_PHONE_GYRO, { yaw_rate_device }, { chassis_R });
+    }
+  }
 }
 
 void Localizer::handle_cam_odo(double current_time, const cereal::CameraOdometry::Reader& log) {
@@ -686,6 +704,9 @@ int Localizer::locationd_thread() {
     source = LocalizerGnssSource::QCOM;
     gps_location_socket = "gpsLocation";
   }
+
+  // manager 每拍镜像的 chassis yaw capability（CP.brand=='byd'）
+  this->chassis_yaw_available = params.getBool("ChassisYawAvailable");
 
   this->configure_gnss_source(source);
   const std::initializer_list<const char *> service_list = {gps_location_socket, "cameraOdometry", "extrinsicsCalibration",

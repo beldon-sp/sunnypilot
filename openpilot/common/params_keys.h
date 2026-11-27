@@ -172,6 +172,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"CarParamsSPCache", {CLEAR_ON_MANAGER_START, BYTES}},
     {"CarParamsSPPersistent", {PERSISTENT, BYTES}},
     {"CarPlatformBundle", {PERSISTENT | BACKUP, JSON}},
+    {"ChassisYawAvailable", {PERSISTENT, BOOL, "0"}},  // manager 每拍镜像 CP.brand=='byd'（0x222 YAW_RATE），locationd chassis yaw KF 观测开关（默认关）
     {"ChevronInfo", {PERSISTENT | BACKUP, INT, "4"}},
     {"CompletedSunnylinkConsentVersion", {PERSISTENT, STRING, "0"}},
     {"CustomAccIncrementsEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
@@ -212,6 +213,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"ShowTurnSignals", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"StandstillTimer", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TrueVEgoUI", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"VirtualSensordEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},  // 无物理 IMU 设备的合成 sensord（默认关；须人工确认 IMU 失效后开启）
 
     // MADS params
     {"Mads", {PERSISTENT | BACKUP, BOOL, "1"}},

@@ -1,6 +1,7 @@
 import os
 import operator
 import platform
+from functools import lru_cache
 
 from opendbc.car.structs import car
 from openpilot.cereal import custom
@@ -42,6 +43,60 @@ def ublox(started: bool, params: Params, CP: car.CarParams) -> bool:
 
 def joystick(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and params.get_bool("JoystickDebugMode")
+
+# --- chassis yaw capability（BYD 0x222 YAW_RATE，carstate 无条件解析且实车验证 corr 0.90-0.97）---
+def chassis_yaw(started: bool, params: Params, CP: car.CarParams) -> bool:
+  # 无源库 extFlags 机制：BYD 直接按 brand 判定。镜像进 Params 供 locationd
+  # （只订 carState，不订 CarParams）启用 chassis yaw KF 观测。每拍执行，
+  # 恒返回 True，不影响宿主进程。
+  available = CP.brand == 'byd'
+  if available != params.get_bool("ChassisYawAvailable"):
+    params.put_bool("ChassisYawAvailable", available, block=True)
+  return True
+
+# --- virtual sensord（无物理 IMU 设备的合成 IMU 进程，默认关）---
+LSM6DS3_I2C_BUS = '/dev/i2c-1'
+LSM6DS3_I2C_ADDR = 0x6A
+LSM6DS3_WHO_AM_I_REG = 0x0F
+LSM6DS3_WHO_AM_I = 0x6A  # LSM6DS3 / LSM6DS3TR-C 同值
+I2C_SLAVE = 0x0703
+
+@lru_cache(maxsize=1)
+def imu_present() -> bool:
+  # 不能用源库的 sysfs 探测（/sys/bus/i2c/devices/1-006a）：2026-11-28 设备实测
+  # C3L 克隆 bus1 无 sysfs 节点而 IMU 硬件在线（sensord 走 i2c-dev 直读，
+  # 不依赖内核枚举），sysfs 探测必然误判"无 IMU"——若 VirtualSensordEnabled=1
+  # 会把健康的真实 sensord 换成合成数据，误判方向在危险的一侧。
+  # 改用 WHO_AM_I 直读（设备上已验证）：探测失败 → 视为无 IMU；异常 →
+  # 保守视为有 IMU（真实 sensord 继续跑，维持现状）。
+  if PC:
+    return True
+  try:
+    import fcntl
+    fd = os.open(LSM6DS3_I2C_BUS, os.O_RDWR)
+    try:
+      fcntl.ioctl(fd, I2C_SLAVE, LSM6DS3_I2C_ADDR)
+      os.write(fd, bytes([LSM6DS3_WHO_AM_I_REG]))
+      return os.read(fd, 1)[0] == LSM6DS3_WHO_AM_I
+    finally:
+      os.close(fd)
+  except Exception:
+    return True
+
+def _virtual_sensord_wanted(params: Params) -> bool:
+  # libparams_c 未重建时 key 未注册，get_bool 抛 UnknownKeyName；
+  # fallback 关，保证 manager 不因门控求值崩溃。
+  try:
+    return params.get_bool("VirtualSensordEnabled")
+  except Exception:
+    return False
+
+def virtual_sensord(started: bool, params: Params, CP: car.CarParams) -> bool:
+  return only_onroad(started, params, CP) and not imu_present() and _virtual_sensord_wanted(params)
+
+def real_sensord(started: bool, params: Params, CP: car.CarParams) -> bool:
+  # 与 virtual_sensord() 严格互补：任一时刻恰好一对 acc/gyro publisher。
+  return only_onroad(started, params, CP) and (imu_present() or not _virtual_sensord_wanted(params))
 
 def not_joystick(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and not params.get_bool("JoystickDebugMode")
@@ -142,7 +197,8 @@ procs = [
   PythonProcess("mapsd", "openpilot.selfdrive.navigation.mapsd", navigation),
   PythonProcess("dmonitoringmodeld", "openpilot.selfdrive.modeld.dmonitoringmodeld", driverview, enabled=(WEBCAM or not PC) and not DISABLE_DRIVER),
 
-  PythonProcess("sensord", "openpilot.system.sensord.sensord", only_onroad, enabled=not PC),
+  PythonProcess("sensord", "openpilot.system.sensord.sensord", real_sensord, enabled=not PC),
+  PythonProcess("virtualsensord", "openpilot.system.sensord.virtual_sensord", virtual_sensord, enabled=not PC),
   PythonProcess("ui", "openpilot.selfdrive.ui.ui", always_run),
   PythonProcess("soundd", "openpilot.selfdrive.ui.soundd", driverview),
   PythonProcess("locationd", "openpilot.selfdrive.locationd.locationd", only_onroad),
@@ -196,7 +252,7 @@ procs += [
 
   # mapd
   NativeProcess("mapd", Paths.mapd_root(), ["bash", "-c", MAPD_PROXY_ENV + f"{MAPD_PATH} > /dev/null 2>&1"], mapd_ready),
-  PythonProcess("mapd_manager", "openpilot.sunnypilot.mapd.mapd_manager", always_run),
+  PythonProcess("mapd_manager", "openpilot.sunnypilot.mapd.mapd_manager", chassis_yaw),
 
   # locationd
   NativeProcess("locationd_llk", "openpilot/sunnypilot/selfdrive/locationd", ["./locationd"], only_onroad),

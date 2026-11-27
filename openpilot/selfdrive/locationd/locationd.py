@@ -14,6 +14,7 @@ from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.locationd.helpers import rotate_std
 from openpilot.selfdrive.locationd.gyro_crosscheck import gyro_yawrate_crosscheck_valid
+from openpilot.selfdrive.locationd.chassis_yaw import chassis_yaw_to_device, chassis_yaw_R
 from openpilot.selfdrive.locationd.models.pose_kf import PoseKalman, States
 from openpilot.selfdrive.locationd.models.constants import ObservationKind, GENERATED_DIR
 
@@ -52,7 +53,7 @@ class HandleLogResult(Enum):
 
 
 class LocationEstimator:
-  def __init__(self, debug: bool):
+  def __init__(self, debug: bool, params: Params):
     self.kf = PoseKalman(GENERATED_DIR, MAX_FILTER_REWIND_TIME)
 
     self.debug = debug
@@ -61,6 +62,9 @@ class LocationEstimator:
     self.car_speed = 0.0
     self.camodo_yawrate_distribution = np.array([0.0, 10.0])  # mean, std
     self.device_from_calib = np.eye(3)
+    # Chassis yaw capability mirrored by manager（CP.brand=='byd'，Params）。
+    # 默认关：无该能力的车型逐字节等价于未打补丁的行为。
+    self.chassis_yaw_available = params.get_bool("ChassisYawAvailable")
 
     obs_kinds = [ObservationKind.PHONE_ACCEL, ObservationKind.PHONE_GYRO, ObservationKind.CAMERA_ODO_ROTATION, ObservationKind.CAMERA_ODO_TRANSLATION]
     self.observations = {kind: np.zeros(3, dtype=np.float32) for kind in obs_kinds}
@@ -150,6 +154,17 @@ class LocationEstimator:
 
     elif which == "carState":
       self.car_speed = abs(msg.vEgo)
+
+      # Chassis yaw rate（ESC，vehicle-frame yaw-up，rad/s）。注入为 yaw-only
+      # PHONE_GYRO 观测：vehicle yaw 轴经 device_from_calib 旋入 device 帧，
+      # per-call R 屏蔽 roll/pitch，只约束 angularVelocity[2]。不新增
+      # ObservationKind，不改 pose_kf 方程。BYD 垃圾帧守卫已在 carstate 端
+      # 完成（非就绪=0.0），此处 ROTATION_SANITY_CHECK 作最后防线。
+      if self.chassis_yaw_available:
+        yaw_rate_device = chassis_yaw_to_device(msg.yawRate, self.device_from_calib)
+        if np.linalg.norm(yaw_rate_device) < ROTATION_SANITY_CHECK:
+          self.kf.predict_and_observe(t, ObservationKind.PHONE_GYRO, yaw_rate_device,
+                                      np.array([chassis_yaw_R()]))
 
     elif which == "extrinsicsCalibration":
       # Note that we use this message during calibration
@@ -278,7 +293,7 @@ def main():
 
   params = Params()
 
-  estimator = LocationEstimator(DEBUG)
+  estimator = LocationEstimator(DEBUG, params)
 
   filter_initialized = False
   critical_services = ["accelerometer", "gyroscope", "cameraOdometry"]
