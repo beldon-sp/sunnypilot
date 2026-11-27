@@ -116,6 +116,12 @@ class _Scroller(Widget):
     self._reset_scroll_at_show = scroll
 
   def scroll_to(self, pos: float, smooth: bool = False, block_interrupt: bool = False, block_widget_interaction: bool = False):
+    # temporary diagnostics: programmatic offset moves can look like scroll jumps
+    _now = rl.get_time()
+    if _now - getattr(self, "_st_log_t", 0.0) > 1.0:
+      self._st_log_t = _now
+      cloudlog.warning(f"scroller: scroll_to pos={pos:.0f} smooth={smooth} offset={self.scroll_panel.get_offset():.0f}")
+
     assert smooth or (not block_interrupt and not block_widget_interaction), "Instant scroll cannot block interaction"
 
     # already there
@@ -267,9 +273,20 @@ class _Scroller(Widget):
   def _layout(self):
     self._visible_items = [item for item in self._items if item.is_visible]
 
+    # temporary diagnostics for the residual "jump then recover" glitch (remove once root-caused)
+    prev_content_size = self._content_size
+
     self._content_size = sum(item.rect.width if self._horizontal else item.rect.height for item in self._visible_items)
     self._content_size += self._spacing * (len(self._visible_items) - 1)
     self._content_size += self._pad * 2
+
+    if abs(self._content_size - prev_content_size) > 20 and prev_content_size > 0:
+      _now = rl.get_time()
+      if _now - getattr(self, "_cs_log_t", 0.0) > 1.0:
+        self._cs_log_t = _now
+        cloudlog.warning(
+          f"scroller: content_size jumped {prev_content_size:.0f}->{self._content_size:.0f} "
+          f"items={len(self._visible_items)} offset={self._scroll_offset:.0f}")
 
     self._scroll_offset = self._get_scroll(self._visible_items, self._content_size)
 
