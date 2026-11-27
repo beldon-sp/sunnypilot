@@ -2,6 +2,7 @@ import pyray as rl
 from collections.abc import Sequence
 from openpilot.system.ui.lib.scroll_panel import GuiScrollPanel
 from openpilot.system.ui.widgets import Widget
+from openpilot.common.swaglog import cloudlog
 
 ITEM_SPACING = 40
 LINE_COLOR = rl.GRAY
@@ -53,6 +54,15 @@ class Scroller(Widget):
     content_height = sum(item.rect.height for item in visible_items) + self._spacing * (len(visible_items))
     if not self._pad_end:
       content_height -= self._spacing
+    # temporary diagnostics: content height flicker shifts the scroll bounds
+    if abs(content_height - getattr(self, "_diag_prev_ch", content_height)) > 20:
+      now = rl.get_time()
+      if now - getattr(self, "_diag_ch_t", 0.0) > 1.0:
+        self._diag_ch_t = now
+        cloudlog.warning(
+          f"scroller_tici: content_height jumped {getattr(self, '_diag_prev_ch', 0):.0f}->{content_height:.0f} "
+          f"items={len(visible_items)}")
+    self._diag_prev_ch = content_height
     scroll = self.scroll_panel.update(self._rect, rl.Rectangle(0, 0, self._rect.width, content_height))
 
     rl.begin_scissor_mode(int(self._rect.x), int(self._rect.y),
