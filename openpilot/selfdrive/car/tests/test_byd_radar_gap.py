@@ -99,6 +99,40 @@ class TestMonitor:
       step(mon, DT, int(R[3] * V))
     assert not mon.closing
 
+  def _latch(self, r_hold):
+    """SET a latch via a 0.4 r/s descent, then return the monitor (already
+    closing) for the caller to drive a specific post-SET profile."""
+    mon = RadarGapMonitor()
+    for k in range(1000):
+      step(mon, DT, int((R[3] - 0.4 * k * DT) * V))
+      if mon.closing:
+        return mon
+    raise AssertionError('descent did not SET')
+
+  def test_steady_hold_below_boundary_releases(self):
+    # 2026-11-27 road-test regression (route 00000007 segs 18/19): HUD gear
+    # lagged a tight-but-steady follow (vRel ~ 0) for 30.1 s / 32.9 s because
+    # the boundary release needs the gap to OPEN past the gear boundary. The
+    # steady-escape must release a flat hold well inside that window.
+    mon = self._latch(3.4)
+    assert mon.closing
+    for _ in range(int(0.5 / DT)):        # brief flat hold: still latched
+      step(mon, DT, int(3.4 * V))
+    assert mon.closing
+    for _ in range(int(6.0 / DT)):        # steady hold, r never opens
+      step(mon, DT, int(3.4 * V))
+    assert not mon.closing                # steady-escape released the latch
+
+  def test_steady_escape_does_not_fire_during_sustained_descent(self):
+    # genuine approach keeps closing: r descends 0.4 r/s straight through the
+    # hold (replay: the real 6.2 s episode at vRel -1.2..-1.7 stayed latched)
+    mon = self._latch(3.4)
+    r = 3.4
+    for _ in range(int(8.0 / DT)):
+      r -= 0.4 * DT
+      step(mon, DT, int(r * V))
+      assert mon.closing
+
   def test_presence_and_sentinel_filters(self):
     mon = RadarGapMonitor()
     for k in range(1000):
