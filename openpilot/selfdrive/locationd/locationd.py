@@ -299,6 +299,11 @@ def main():
   critical_services = ["accelerometer", "gyroscope", "cameraOdometry"]
   observation_input_invalid = defaultdict(int)
 
+  # ChassisYawAvailable 由 manager 从 carParams 镜像，而 carParams 只在 onroad
+  # 由 card 发布：onroad 切换后镜像可能晚几拍才翻转，周期性重读避免拿一次
+  # False 就整段行程失效。
+  last_capability_check = 0.0
+
   input_invalid_limit = {s: round(INPUT_INVALID_LIMIT * (SERVICE_LIST[s].frequency / 20.)) for s in critical_services}
   input_invalid_threshold = {s: input_invalid_limit[s] - 0.5 for s in critical_services}
   input_invalid_decay = {s: calculate_invalid_input_decay(input_invalid_limit[s], INPUT_INVALID_RECOVERY, SERVICE_LIST[s].frequency) for s in critical_services}
@@ -318,6 +323,10 @@ def main():
 
   while True:
     sm.update()
+
+    if time.monotonic() - last_capability_check > 2.0:
+      estimator.chassis_yaw_available = params.get_bool("ChassisYawAvailable")
+      last_capability_check = time.monotonic()
 
     acc_msgs, gyro_msgs = (messaging.drain_sock(sock) for sock in sensor_sockets)
 

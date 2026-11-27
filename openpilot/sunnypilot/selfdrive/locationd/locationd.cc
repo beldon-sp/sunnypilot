@@ -738,6 +738,12 @@ int Localizer::locationd_thread() {
 
     const char* trigger_msg = "cameraOdometry";
     if (sm.updated(trigger_msg)) {
+      // ChassisYawAvailable 由 manager 从 carParams 镜像，carParams 只在 onroad
+      // 由 card 发布：onroad 切换后镜像可能晚几拍翻转，周期重读（20Hz 拍 ≈ 5s）
+      // 避免拿一次 false 就整段行程失效。
+      if (cnt % 100 == 0) {
+        this->chassis_yaw_available = params.getBool("ChassisYawAvailable");
+      }
       bool inputsOK = sm.allValid() && this->are_inputs_ok();
       bool gpsOK = this->is_gps_ok();
       bool sensorsOK = sm.allAliveAndValid({"accelerometer", "gyroscope"});
