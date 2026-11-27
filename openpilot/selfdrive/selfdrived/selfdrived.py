@@ -174,6 +174,10 @@ class SelfdriveD:
     self.last_functional_fan_frame = 0
     self.events_prev = []
     self.logged_comm_issue = None
+    # valid-only commIssue grace: tolerate short "data flows at normal rate but valid=False"
+    # jitter (e.g. radard scheduling hiccup cascading through plannerd, isolated camodo drop)
+    # instead of immediately soft-disabling; dead/slow feed sources still raise immediately
+    self.comm_issue_valid_run = 0
     self.not_running_prev = None
     self.personality = get_sanitize_int_param(
       "LongitudinalPersonality",
@@ -514,11 +518,19 @@ class SelfdriveD:
     big_model_settling = self.big_model_loading or time.monotonic() < self.big_model_ready_t + warmup_sec
     if not self.sm.all_checks() and no_system_errors and not big_model_settling:  # the load holds modelV2 and friends back on purpose
       if not self.sm.all_alive():
+        self.comm_issue_valid_run = 0
         self.events.add(EventName.commIssue)
       elif not self.sm.all_freq_ok():
+        self.comm_issue_valid_run = 0
         self.events.add(EventName.commIssueAvgFreq)
       else:
-        self.events.add(EventName.commIssue)
+        # valid-only failure: data still arrives at normal rate, so absorb short valid jitter
+        # (e.g. radard scheduling hiccup cascading through plannerd, isolated camodo drop).
+        # Require the failure to persist ~1s before raising; real feed outages are caught by
+        # the alive/freq branches above immediately.
+        self.comm_issue_valid_run += 1
+        if self.comm_issue_valid_run >= int(1. / DT_CTRL):  # 100 frames @100Hz
+          self.events.add(EventName.commIssue)
 
       logs = {
         'invalid': [s for s, valid in self.sm.valid.items() if not valid],
@@ -529,6 +541,7 @@ class SelfdriveD:
         cloudlog.event("commIssue", error=True, **logs)
         self.logged_comm_issue = logs
     else:
+      self.comm_issue_valid_run = 0
       self.logged_comm_issue = None
 
     if not self.CP.notCar and not big_model_settling:  # localization has nothing to work with during the load
