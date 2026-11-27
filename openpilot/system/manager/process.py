@@ -97,7 +97,13 @@ class ManagerProcess(ABC):
       if self.proc.exitcode is None and retry:
         cloudlog.info(f"killing {self.name} with SIGKILL")
         self.signal(signal.SIGKILL)
-        self.proc.join()
+        join_process(self.proc, 5)
+
+      # Process may still be stuck in kernel D state (uninterruptible, e.g. qcom_vidc) and never
+      # get reaped. Do NOT block the manager main loop waiting for it: leave the accounting as-is
+      # (self.proc kept, shutting_down stays True) and finish the cleanup on a later pass.
+      if self.proc.exitcode is None:
+        cloudlog.warning(f"{self.name} still not reaped after SIGKILL + join timeout; deferring cleanup")
 
     ret = self.proc.exitcode
     cloudlog.info(f"{self.name} is dead with {ret}")

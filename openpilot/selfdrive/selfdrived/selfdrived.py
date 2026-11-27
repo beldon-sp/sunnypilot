@@ -111,9 +111,14 @@ class SelfdriveD:
     # carrotNavi 是可选导航增强服务（carrotmate，2Hz，仅导航中稳定发布）。车静止或未连接
     # 时频率不达标，若参与 all_checks() 会持续触发 commIssue 并阻止 engagement。导航源新鲜度
     # 由各消费者读 sm.seen/alive/valid/recv_time 自行判定，不受此 ignore 影响，故豁免安全。
-    ignore = self.sensor_packets + self.gps_packets + ['alertDebug', 'lateralManeuverPlan'] + ['modelDataV2SP', 'longitudinalPlanSP'] + ['carrotNavi']
+    # managerState is pure supervision data and must not participate in commIssue alive/freq/valid
+    # gating: a stalled manager main loop (e.g. unbounded join during process stop) would otherwise
+    # freeze managerState and cascade into a spurious commIssue SOFT_DISABLE. A truly dead manager
+    # is still exposed by the control-chain feed sources dying, and dead child processes are still
+    # caught below via processNotRunning (message content), which only needs recv_frame.
+    ignore = self.sensor_packets + self.gps_packets + ['alertDebug', 'managerState', 'lateralManeuverPlan'] + ['modelDataV2SP', 'longitudinalPlanSP'] + ['carrotNavi']
     if SIMULATION:
-      ignore += ['cabinCameraState', 'managerState']
+      ignore += ['cabinCameraState']
     if REPLAY:
       # no vipc in replay will make them ignored anyways
       ignore += ['narrowRoadCameraState', 'wideRoadCameraState']
