@@ -962,3 +962,30 @@ def test_payload_rejects_encoded_or_invalid_road_limit():
   speed = speed_payload(300)
   assert speed["roadLimitValid"] is False
   assert speed["roadLimitKph"] == 0
+
+
+def test_payload_bool_never_passes_as_number():
+  """tc-v61 probe 解析纪律：JSON bool 永不通过数字校验（isinstance(True, int) 陷阱）。"""
+  from openpilot.selfdrive.carrot.carrot_navi_cereal import _finite, _integer
+
+  # helper 层：bool → default，绝不静默当 1.0/0.0
+  assert _finite(True) == 0.0
+  assert _finite(False, default=-1.5) == -1.5
+  assert _integer(True, default=-1) == -1
+  assert _integer(False, default=-1) == -1
+
+  # payload 层：turn_type=true 不得被当作合法编码（fail-inert 回 default）
+  payload = build_carrot_navi_payload({
+    "generation": 1,
+    "session_id": "session",
+    "connected": True,
+    "items": {
+      "guidance_current": {
+        "present": True,
+        "sequence": 1,
+        "value": {"turn_type": True, "distance_m": False},
+      },
+    },
+  }, publish_mono_ns=999)
+  assert payload["guidanceCurrent"]["turnType"] == -1
+  assert payload["guidanceCurrent"]["distanceM"] == 0

@@ -364,6 +364,8 @@ struct OnroadEventSP @0xda96579883444c35 {
     carrotTrafficSignal @26;  # 前方红灯接近预警（carrotmate trafficSignal 流）
     carrotNavTurn @27;        # 导航转向预告（carrotmate guidanceCurrent 流）
     carrotNavOffRoute @28;    # 已偏航提示（carrotmate navigationStatus 流）
+    carrotNavConsecutiveTurns @29;  # 连续转弯预告（当前+下一 maneuver 均 turn/rotary，一次性）
+    carrotNavArrivalSoon @30;       # 即将到达提醒（剩余里程首次进入阈值，一次性）
   }
 }
 

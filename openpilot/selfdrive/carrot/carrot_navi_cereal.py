@@ -30,6 +30,10 @@ def _list(value: Any) -> list[Any]:
 
 def _finite(value: Any, default: float = 0.0,
             minimum: float | None = None, maximum: float | None = None) -> float:
+  # JSON bool 永不通过数字校验（Python 里 isinstance(True, int) 为 True，
+  # 不排除则 true/false 会被静默当 1.0/0.0 消费——tc-v61 probe 解析纪律）。
+  if isinstance(value, bool):
+    return default
   try:
     parsed = float(value)
   except (TypeError, ValueError):

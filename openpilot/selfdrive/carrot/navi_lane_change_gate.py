@@ -32,6 +32,14 @@ crossroad）；离线 OSM mapd（LiveMapDataSP）只有限速/路名，无车道
   拨右杆不得发起）。同方向、未知方向、掉头、到达均放行；本抑制层不依赖
   laneCurrent 增强字段（车道级 turnInfo 映射等 laneInfoList 真车校准完成
   后再启用，见 spec「车道信息字段映射校准」硬门）。
+
+跨帧状态与路线翻转（tc-v61 probe P3 纪律）：
+- 本类无任何跨帧抑制缓存——block_reason 每帧从当帧 carrotNavi 数据现算，
+  route 重算（源库 generation 翻转语义）无需清理动作；
+  test_navi_lane_change_gate.py 的 TestFrameIndependence 用测试钉死该不变量；
+- 若将来引入跨帧状态（记忆/缓存），必须实现路线翻转清理，且遵守源库
+  CarrotNaviLaneCoordinator 的安全构造：翻转只允许移除抑制，永不添加
+  ——fail-safe by construction。
 """
 import time
 

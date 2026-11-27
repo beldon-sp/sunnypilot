@@ -68,6 +68,27 @@ def carrot_nav_off_route_alert(CP: car.CarParams, CS: car.CarState, sm: messagin
     Priority.MID, VisualAlert.none, AudibleAlert.none, 0.4)
 
 
+def carrot_nav_consecutive_turns_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
+  guidance = sm['carrotNavi'].guidanceCurrent
+  guidance_next = sm['carrotNavi'].guidanceNext
+  return Alert(
+    tr("{} in {} m, then {} in {} m").format(
+      turn_text(guidance.turnType), guidance.distanceM,
+      turn_text(guidance_next.turnType), guidance_next.distanceM),
+    "",
+    AlertStatus.normal, AlertSize.small,
+    Priority.LOW, VisualAlert.none, AudibleAlert.none, 0.4)
+
+
+def carrot_nav_arrival_soon_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
+  remaining = sm['carrotNavi'].route.remainingDistanceM
+  return Alert(
+    tr("Destination in {} m").format(remaining),
+    "",
+    AlertStatus.normal, AlertSize.small,
+    Priority.LOW, VisualAlert.none, AudibleAlert.none, 0.4)
+
+
 def speed_limit_pre_active_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
   speed_conv = CV.MS_TO_KPH if metric else CV.MS_TO_MPH
   v_cruise_cluster = CS.vCruiseCluster
@@ -299,5 +320,13 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
 
   EventNameSP.carrotNavOffRoute: {
     ET.PERMANENT: carrot_nav_off_route_alert,
+  },
+
+  EventNameSP.carrotNavConsecutiveTurns: {
+    ET.PERMANENT: carrot_nav_consecutive_turns_alert,
+  },
+
+  EventNameSP.carrotNavArrivalSoon: {
+    ET.PERMANENT: carrot_nav_arrival_soon_alert,
   },
 }

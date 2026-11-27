@@ -275,5 +275,36 @@ class TestDesireHelperSeam:
     assert dh.lane_change_state == 2
 
 
+class TestFrameIndependence:
+  """路线翻转不变量（tc-v61 probe P3）：闸门输出只依赖当帧 carrotNavi 数据。
+
+  本类无跨帧抑制缓存，route 重算无需清理动作；若将来引入跨帧状态，
+  必须实现翻转清理且遵守"翻转只移除抑制，永不添加"。
+  """
+
+  def test_no_memory_across_route_changes(self):
+    gate = fresh_gate()
+    gate.enabled = True
+    # 帧1：临近右转 → 抑制
+    assert gate.update(FakeSM(_navi(turn_type=13, turn_distance=100))) is False
+    assert gate.block_reason == "near_turn"
+    # 帧2：路线重算（抑制依据消失）→ 同一实例立即放行
+    assert gate.update(FakeSM(_navi())) is True
+    assert gate.block_reason == ""
+    # 帧3：抑制条件再次成立 → 再抑制（不因历史而豁免，也不因历史而残留）
+    assert gate.update(FakeSM(_navi(turn_type=13, turn_distance=100))) is False
+    assert gate.block_reason == "near_turn"
+
+  def test_conflict_direction_follows_current_frame_only(self):
+    gate = fresh_gate()
+    gate.params.put_bool("NaviGuidedLaneChangeEnabled", True, block=True)
+    gate.params.put_bool("NaviLaneChangeDirectionEnabled", True, block=True)
+    gate._read_params()
+    # 帧1：左转 400m 拨右杆 → 方向冲突抑制
+    assert gate.update(FakeSM(_navi(turn_type=12, turn_distance=400)), LaneChangeDirection.right) is False
+    # 帧2：重算路后转向消失 → 放行（旧抑制依据不得跨帧残留）
+    assert gate.update(FakeSM(_navi()), LaneChangeDirection.right) is True
+
+
 if __name__ == "__main__":
   pytest.main([__file__])
