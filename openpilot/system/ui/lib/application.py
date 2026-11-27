@@ -377,9 +377,19 @@ class MouseState:
                 cloudlog.warning(f"touch: ring before rejection: {dump}")
               raw = prev_raw
           recent_reports.append((t, slot, orig_raw, down, rejected))
-          # the panel's corrupt samples always zero exactly one axis; flag any
-          # accepted down report with that signature (press/lift bypasses the
-          # glitch check, so those are the ones that poison the anchor)
+          if down and not was_down and (orig_raw[0] == 0 or orig_raw[1] == 0):
+            # contact-start report with one axis still missing/zeroed (the
+            # panel occasionally emits SYN between X and Y, or reports a
+            # corrupt centroid). forwarding it emits a spurious tap at the
+            # screen edge AND poisons last_raw, so every real report that
+            # follows is "too far" and gets rejected — the scroll
+            # "jump then recover" trigger. wait for a complete coordinate.
+            now = time.monotonic()
+            if now - zero_axis_log.get(slot, 0.0) > 1.0:
+              zero_axis_log[slot] = now
+              cloudlog.warning(
+                f"touch: suppressed zeroed-axis press slot={slot} raw={orig_raw} t={t:.3f}")
+            continue
           if down and (orig_raw[0] == 0 or orig_raw[1] == 0):
             now = time.monotonic()
             if now - zero_axis_log.get(slot, 0.0) > 1.0:

@@ -10,6 +10,14 @@ BOUNCE_RETURN_RATE = 5              # ~0.92 at 60fps
 MIN_VELOCITY = 2                    # px/s, changes from auto scroll to steady state
 MIN_VELOCITY_FOR_CLICKING = 2 * 60  # px/s, accepts clicks while auto scrolling below this velocity
 DRAG_THRESHOLD = 12                 # pixels of movement to consider it a drag, not a click
+# per-event drag integration guard. the touch panel occasionally emits ghost
+# samples that survive the source-level filters (e.g. a fresh contact whose
+# first complete coordinate lands far from the previous gesture); integrating
+# such a delta leaps the content in one frame and kicks the velocity filter
+# into a fling — the intermittent "jump then recover". human flicks at 140Hz
+# peak around ~100px per report, so 150 leaves headroom while catching them.
+MAX_DRAG_DELTA = 150                # pixels, max plausible delta for one touch event
+MAX_DRAG_VELOCITY = 6000            # px/s, clamp for the inertia velocity filter
 
 DEBUG = False
 
@@ -100,6 +108,10 @@ class GuiScrollPanel:
     elif self._scroll_state == ScrollState.DRAGGING_CONTENT:
       if mouse_event.left_released:
         self._scroll_state = ScrollState.IDLE
+      elif abs(mouse_event.pos.y - self._last_mouse_y) > MAX_DRAG_DELTA:
+        # ghost delta: adopt the position as the new reference without
+        # integrating it or feeding the inertia filter
+        pass
       else:
         delta_y = mouse_event.pos.y - self._last_mouse_y
         above_bounds, below_bounds = self._check_bounds(bounds, content)
@@ -113,7 +125,7 @@ class GuiScrollPanel:
         dt = mouse_event.t - self._last_drag_time
         if dt > 0:
           drag_velocity = delta_y / dt
-          self._velocity_filter_y.update(drag_velocity)
+          self._velocity_filter_y.update(max(-MAX_DRAG_VELOCITY, min(MAX_DRAG_VELOCITY, drag_velocity)))
 
         # TODO: just store last mouse event!
     self._last_drag_time = mouse_event.t
