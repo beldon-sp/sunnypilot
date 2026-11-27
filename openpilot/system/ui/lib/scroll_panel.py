@@ -1,10 +1,8 @@
 import math
-import time
 import pyray as rl
 from enum import IntEnum
 from openpilot.system.ui.lib.application import gui_app, MouseEvent
 from openpilot.common.filter_simple import FirstOrderFilter
-from openpilot.common.swaglog import cloudlog
 
 # Scroll constants for smooth scrolling behavior
 MOUSE_WHEEL_SCROLL_SPEED = 50
@@ -20,18 +18,6 @@ DRAG_THRESHOLD = 12                 # pixels of movement to consider it a drag, 
 # peak around ~100px per report, so 150 leaves headroom while catching them.
 MAX_DRAG_DELTA = 150                # pixels, max plausible delta for one touch event
 MAX_DRAG_VELOCITY = 6000            # px/s, clamp for the inertia velocity filter
-
-DEBUG = False
-
-# temporary diagnostics for the residual "jump then recover" glitch (remove once root-caused)
-_diag_last: dict[str, float] = {}
-
-
-def _diag(key: str, period: float, msg: str) -> None:
-  now = time.monotonic()
-  if now - _diag_last.get(key, 0.0) >= period:
-    _diag_last[key] = now
-    cloudlog.warning(msg)
 
 
 class ScrollState(IntEnum):
@@ -53,22 +39,11 @@ class GuiScrollPanel:
       if mouse_event.slot == 0:
         self._handle_mouse_event(mouse_event, bounds, content)
 
-    # watchdog: any large per-frame offset move leaves a trace, whatever the source
-    offset = float(self._offset_filter_y.x)
-    if abs(offset - getattr(self, "_diag_prev_offset", offset)) > 80:
-      _diag("v1_offset_jump", 0.5,
-            f"scrollv1: offset jumped {getattr(self, '_diag_prev_offset', 0):.0f}->{offset:.0f} "
-            f"state={self._scroll_state.name} velocity={self._velocity_filter_y.x:.0f}")
-    self._diag_prev_offset = offset
-
     self._update_state(bounds, content)
 
     return float(self._offset_filter_y.x)
 
   def _update_state(self, bounds: rl.Rectangle, content: rl.Rectangle):
-    if DEBUG:
-      rl.draw_rectangle_lines(0, 0, abs(int(self._velocity_filter_y.x)), 10, rl.RED)
-
     # Handle mouse wheel only when the mouse cursor is over this panel
     mouse_wheel = rl.get_mouse_wheel_move()
     if mouse_wheel != 0:
@@ -115,9 +90,6 @@ class GuiScrollPanel:
           # Interrupt scrolling with new drag
           # TODO: stop scrolling with any tap, need to fix is_touch_valid
           if abs(self._velocity_filter_y.x) > MIN_VELOCITY_FOR_CLICKING:
-            _diag("v1_fling_press", 1.0,
-                  f"scrollv1: press during fling pos={mouse_event.pos.y:.0f} "
-                  f"velocity={self._velocity_filter_y.x:.0f} t={mouse_event.t:.3f}")
             self._scroll_state = ScrollState.DRAGGING_CONTENT
             # Start velocity at initial measurement for more immediate response
             self._velocity_filter_y.initialized = False
@@ -134,9 +106,7 @@ class GuiScrollPanel:
       elif abs(mouse_event.pos.y - self._last_mouse_y) > MAX_DRAG_DELTA:
         # ghost delta: adopt the position as the new reference without
         # integrating it or feeding the inertia filter
-        _diag("v1_guard", 0.5,
-              f"scrollv1: guard tripped delta={mouse_event.pos.y - self._last_mouse_y:.0f} "
-              f"pos={mouse_event.pos.y:.0f} last={self._last_mouse_y:.0f} t={mouse_event.t:.3f}")
+        pass
       else:
         delta_y = mouse_event.pos.y - self._last_mouse_y
         above_bounds, below_bounds = self._check_bounds(bounds, content)

@@ -305,18 +305,11 @@ class MouseState:
     last_down: dict[int, bool] = {}
     last_pos: dict[int, MousePos] = {}
     last_raw: dict[int, tuple[int, int]] = {}
-    glitch_count: dict[int, int] = {}
-    last_glitch_log: dict[int, float] = {}
-    # diagnostics for the residual "jump then recover" glitch (remove once root-caused)
-    rej_run: dict[int, int] = {}          # consecutive rejections that agree with each other
+    # runs of agreeing rejections, for re-anchoring a poisoned anchor
+    rej_run: dict[int, int] = {}
     rej_last: dict[int, tuple[int, int]] = {}
-    recent_reports: deque[tuple[float, int, tuple[int, int], bool, bool]] = deque(maxlen=48)
-    zero_axis_log: dict[int, float] = {}
-    ring_log: list[float] = [0.0]
     pending_move: dict[int, tuple[MousePos, float]] = {}
     last_accept: dict[int, MousePos] = {}
-    spike_count: dict[int, int] = {}
-    spike_log: dict[int, float] = {}
     cur_slot = 0
 
     def emit(slot: int, pos: MousePos, pressed: bool, released: bool, down: bool, t: float) -> None:
@@ -340,8 +333,6 @@ class MouseState:
         raw = slot_raw.get(slot)
         if raw is not None:
           prev_raw = last_raw.get(slot)
-          orig_raw = raw
-          rejected = False
           if (down and was_down and prev_raw is not None and
               abs(raw[0] - prev_raw[0]) + abs(raw[1] - prev_raw[1]) > TOUCH_GLITCH_JUMP):
             # one-shot outlier sample (panel noise): a ghost position that the
@@ -349,7 +340,6 @@ class MouseState:
             # (e.g. scroll offset += delta), so a single bad sample leaps the
             # content and the following sample restores it — "jump then
             # recover". suppress the jump instead of forwarding it.
-            glitch_count[slot] = glitch_count.get(slot, 0) + 1
             # Runs of agreeing rejections mean the ANCHOR is the outlier: a
             # one-axis-zeroed corrupt sample slipped into last_raw at press or
             # lift (where the check is bypassed), so every real report is now
@@ -363,50 +353,25 @@ class MouseState:
               rej_run[slot] = 1
             rej_last[slot] = raw
             if rej_run[slot] >= 3:
-              cloudlog.warning(
-                f"touch: re-anchoring slot={slot} to {raw} after {rej_run[slot]} agreeing rejections "
-                f"(stale anchor was {prev_raw}) count={glitch_count[slot]} t={t:.3f}")
               rej_run[slot] = 0
               last_raw[slot] = raw
-            else:
-              rejected = True
-              now = time.monotonic()
-              if now - last_glitch_log.get(slot, 0.0) > 1.0:
-                last_glitch_log[slot] = now
-                cloudlog.warning(
-                  f"touch: rejected glitch sample slot={slot} prev={prev_raw} raw={orig_raw} "
-                  f"count={glitch_count[slot]} t={t:.3f}")
-              # dump the report ring around the rejection for the jump diagnosis
-              if now - ring_log[0] > 0.5:
-                ring_log[0] = now
-                dump = " | ".join(
-                  f"t={rt:.3f} s={rslot} raw={rraw} down={int(rdown)}{' REJ' if rrej else ''}"
-                  for rt, rslot, rraw, rdown, rrej in list(recent_reports)[-24:])
-                cloudlog.warning(f"touch: ring before rejection: {dump}")
-              raw = prev_raw
-          recent_reports.append((t, slot, orig_raw, down, rejected))
-          if down and not was_down and (orig_raw[0] == 0 or orig_raw[1] == 0):
+          elif down and not was_down and (raw[0] == 0 or raw[1] == 0):
             # contact-start report with one axis still missing/zeroed (the
             # panel occasionally emits SYN between X and Y, or reports a
             # corrupt centroid). forwarding it emits a spurious tap at the
             # screen edge AND poisons last_raw, so every real report that
             # follows is "too far" and gets rejected — the scroll
             # "jump then recover" trigger. wait for a complete coordinate.
-            now = time.monotonic()
-            if now - zero_axis_log.get(slot, 0.0) > 1.0:
-              zero_axis_log[slot] = now
-              cloudlog.warning(
-                f"touch: suppressed zeroed-axis press slot={slot} raw={orig_raw} t={t:.3f}")
             continue
-          if down and (orig_raw[0] == 0 or orig_raw[1] == 0):
-            now = time.monotonic()
-            if now - zero_axis_log.get(slot, 0.0) > 1.0:
-              zero_axis_log[slot] = now
-              cloudlog.warning(
-                f"touch: accepted down report with zeroed axis slot={slot} raw={orig_raw} "
-                f"was_down={was_down} t={t:.3f}")
-          last_raw[slot] = raw
-          last_pos[slot] = self._to_screen_pos(*raw)
+          elif down and (raw[0] == 0 or raw[1] == 0):
+            # mid-gesture zeroed-axis report: adopt it (it might be real, e.g.
+            # a contact at the panel edge) but don't count it as a re-anchor run
+            rej_run[slot] = 0
+            last_raw[slot] = raw
+          else:
+            rej_run[slot] = 0
+            last_raw[slot] = raw
+          last_pos[slot] = self._to_screen_pos(*last_raw[slot])
         pos = last_pos.get(slot, MousePos(-1.0, -1.0))
         pressed = down and not was_down
         released = was_down and not down
@@ -439,13 +404,7 @@ class MouseState:
               d_pend = abs(ppos.x - acc.x) + abs(ppos.y - acc.y)
               d_next = abs(pos.x - acc.x) + abs(pos.y - acc.y)
               if d_pend > SPIKE_CONFIRM_DIST and d_next < d_pend:
-                spike_count[slot] = spike_count.get(slot, 0) + 1
-                now = time.monotonic()
-                if now - spike_log.get(slot, 0.0) > 1.0:
-                  spike_log[slot] = now
-                  cloudlog.warning(
-                    f"touch: dropped spike sample slot={slot} held={ppos} next={pos} "
-                    f"acc={acc} count={spike_count[slot]} t={t:.3f}")
+                # spike: drop the held sample and keep the successor
                 pending_move[slot] = (pos, t)
                 last_down[slot] = down
                 continue

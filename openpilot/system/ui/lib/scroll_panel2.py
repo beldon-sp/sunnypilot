@@ -1,13 +1,10 @@
-import os
 import math
-import time
 import pyray as rl
 from collections.abc import Callable
 from enum import Enum
 from typing import cast
 from openpilot.system.ui.lib.application import gui_app, MouseEvent
 from openpilot.common.hardware import COMMA_HARDWARE
-from openpilot.common.swaglog import cloudlog
 from collections import deque
 
 MIN_VELOCITY = 10  # px/s, changes from auto scroll to steady state
@@ -24,19 +21,6 @@ MAX_SPEED = 10000.0  # px/s
 # frame reports a huge frame_time; integrating velocity over it leaps the
 # content by velocity*stall_duration — the "jump then settle" glitch.
 MAX_FRAME_DT = 0.1  # seconds
-
-DEBUG = os.getenv("DEBUG_SCROLL", "0") == "1"
-
-# temporary diagnostics for the residual "jump then recover" glitch (remove once root-caused)
-_log_last: dict[str, float] = {}
-
-
-def _throttled_log(key: str, period: float, msg: str) -> None:
-  now = time.monotonic()
-  if now - _log_last.get(key, 0.0) >= period:
-    _log_last[key] = now
-    cloudlog.warning(msg)
-
 
 # Weights older (steadier) velocity samples more heavily on release.
 # Finger-lift samples are noisy; trusting earlier samples gives consistent fling velocity.
@@ -88,9 +72,6 @@ class GuiScrollPanel2:
     return self._enabled() if callable(self._enabled) else self._enabled
 
   def update(self, bounds: rl.Rectangle, content_size: float, snap_target: float | None = None) -> float:
-    if DEBUG:
-      print('Old state:', self._state)
-
     bounds_size = bounds.width if self._horizontal else bounds.height
 
     for mouse_event in gui_app.mouse_events:
@@ -106,11 +87,6 @@ class GuiScrollPanel2:
 
     self._update_state(bounds_size, content_size, snap_target)
 
-    if DEBUG:
-      print('Velocity:', self._velocity)
-      print('Offset X:', self._offset.x, 'Y:', self._offset.y)
-      print('New state:', self._state)
-      print()
     return self.get_offset()
 
   def _get_offset_bounds(self, bounds_size: float, content_size: float) -> tuple[float, float]:
@@ -124,9 +100,6 @@ class GuiScrollPanel2:
     if self._state == ScrollState.STEADY:
       # if we find ourselves out of bounds, scroll back in (from external layout dimension changes, etc.)
       if self.get_offset() > max_offset or self.get_offset() < min_offset:
-        _throttled_log("autoscroll_entry", 1.0,
-                       f"scroll2: STEADY out of bounds -> AUTO_SCROLL offset={self.get_offset():.0f} "
-                       f"bounds=[{min_offset:.0f},{max_offset:.0f}] (content_size flicker?)")
         self._state = ScrollState.AUTO_SCROLL
 
     elif self._state == ScrollState.AUTO_SCROLL:
@@ -178,8 +151,6 @@ class GuiScrollPanel2:
     max_offset, min_offset = self._get_offset_bounds(bounds_size, content_size)
     # simple exponential return if out of bounds
     out_of_bounds = self.get_offset() > max_offset or self.get_offset() < min_offset
-    if DEBUG:
-      print('Mouse event:', mouse_event)
 
     mouse_pos = self._get_mouse_pos(mouse_event)
 
@@ -230,20 +201,11 @@ class GuiScrollPanel2:
           abs_velocity_buffer = [(abs(v), i) for i, v in enumerate(self._velocity_buffer)]
           max_idx = max(abs_velocity_buffer[:len(abs_velocity_buffer) // 2])[1]
           min_idx = min(abs_velocity_buffer)[1]
-          if DEBUG:
-            print('min_idx:', min_idx, 'max_idx:', max_idx, 'velocity buffer:', self._velocity_buffer)
           if (abs(self._velocity_buffer[min_idx]) * REJECT_DECELERATION_FACTOR < abs(self._velocity_buffer[max_idx]) and
               max_idx < min_idx):
-            if DEBUG:
-              print('deceleration too high, going to STEADY')
             high_decel = True
 
         self._velocity = weighted_velocity(self._velocity_buffer)
-
-        if abs(self._velocity) > 1500:
-          _throttled_log("release_velocity", 0.5,
-                         f"scroll2: release velocity={self._velocity:.0f} high_decel={high_decel} "
-                         f"buffer={[round(v) for v in self._velocity_buffer]}")
 
         # If final velocity is below some threshold, switch to steady state too
         low_speed = abs(self._velocity) <= MIN_VELOCITY_FOR_CLICKING * 1.5  # plus some margin
@@ -263,11 +225,6 @@ class GuiScrollPanel2:
         delta_t = max((mouse_event.t - cast(MouseEvent, self._previous_mouse_event).t), 1e-6)
         self._velocity = delta_x / delta_t
         self._velocity = max(-MAX_SPEED, min(MAX_SPEED, self._velocity))
-        if abs(delta_x) > 50:
-          _throttled_log("big_delta", 0.5,
-                         f"scroll2: big drag delta={delta_x:.0f} offset={self.get_offset():.0f} "
-                         f"slot={mouse_event.slot} t={mouse_event.t:.3f} prev_t={self._previous_mouse_event.t:.3f} "
-                         f"dt={delta_t:.4f}s pos={mouse_pos:.0f} prev_pos={previous_mouse_pos:.0f}")
         self._velocity_buffer.append(self._velocity)
 
         # rubber-banding: reduce dragging when out of bounds
@@ -302,9 +259,6 @@ class GuiScrollPanel2:
     return self._offset.x if self._horizontal else self._offset.y
 
   def set_offset(self, value: float) -> None:
-    if abs(value - self.get_offset()) > 60:
-      _throttled_log("set_offset_jump", 0.5,
-                     f"scroll2: set_offset jump {self.get_offset():.0f}->{value:.0f} state={self._state.name}")
     if self._horizontal:
       self._offset.x = value
     else:
