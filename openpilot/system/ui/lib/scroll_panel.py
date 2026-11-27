@@ -55,7 +55,7 @@ class GuiScrollPanel:
 
     # watchdog: any large per-frame offset move leaves a trace, whatever the source
     offset = float(self._offset_filter_y.x)
-    if abs(offset - getattr(self, "_diag_prev_offset", offset)) > 150:
+    if abs(offset - getattr(self, "_diag_prev_offset", offset)) > 80:
       _diag("v1_offset_jump", 0.5,
             f"scrollv1: offset jumped {getattr(self, '_diag_prev_offset', 0):.0f}->{offset:.0f} "
             f"state={self._scroll_state.name} velocity={self._velocity_filter_y.x:.0f}")

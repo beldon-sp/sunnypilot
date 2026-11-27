@@ -99,6 +99,10 @@ TOUCH_EVENT_DEVICE = os.getenv("TOUCH_EVENT_DEVICE", "/dev/input/by-path/platfor
 # catching the 100-300px ghost samples that used to slip through at 300 and
 # integrate as real scroll deltas ("jump then recover").
 TOUCH_GLITCH_JUMP = int(os.getenv("TOUCH_GLITCH_JUMP", "150"))
+# held-move spike confirmation threshold (screen px, Manhattan): a held sample
+# that ends up this far from the accepted trajectory AND gets beaten by its
+# successor (which is closer to the trajectory) is a panel ghost and is dropped
+SPIKE_CONFIRM_DIST = 40
 _EV_SYN, _EV_KEY, _EV_ABS = 0x00, 0x01, 0x03
 _SYN_REPORT = 0
 _ABS_MT_SLOT, _ABS_MT_TRACKING_ID, _ABS_MT_POSITION_X, _ABS_MT_POSITION_Y = 0x2f, 0x39, 0x35, 0x36
@@ -309,6 +313,10 @@ class MouseState:
     recent_reports: deque[tuple[float, int, tuple[int, int], bool, bool]] = deque(maxlen=48)
     zero_axis_log: dict[int, float] = {}
     ring_log: list[float] = [0.0]
+    pending_move: dict[int, tuple[MousePos, float]] = {}
+    last_accept: dict[int, MousePos] = {}
+    spike_count: dict[int, int] = {}
+    spike_log: dict[int, float] = {}
     cur_slot = 0
 
     def emit(slot: int, pos: MousePos, pressed: bool, released: bool, down: bool, t: float) -> None:
@@ -404,7 +412,46 @@ class MouseState:
         released = was_down and not down
         if raw is None and not released:
           continue
-        emit(slot, pos, pressed, released, down, t)
+
+        if pressed or released or not down:
+          # state transitions emit immediately; a held move is flushed on a
+          # re-press and dropped on release (losing <=1 sample of velocity
+          # history is cheaper than integrating an unconfirmed spike)
+          pend = pending_move.pop(slot, None)
+          if pend is not None and pressed:
+            emit(slot, pend[0], False, False, True, pend[1])
+          emit(slot, pos, pressed, released, down, t)
+          last_accept[slot] = pos
+        else:
+          # mid-gesture move: hold for one report and confirm against the
+          # next one. the panel's ghost samples ("jump then recover") return
+          # toward the accepted trajectory on the following report, while
+          # real motion keeps moving away — so a held sample that ended up
+          # much farther from the accepted position than its successor is a
+          # spike and gets dropped. costs one report (~7ms) of latency.
+          pend = pending_move.get(slot)
+          if pend is None:
+            pending_move[slot] = (pos, t)
+          else:
+            ppos, pt = pend
+            acc = last_accept.get(slot)
+            if acc is not None:
+              d_pend = abs(ppos.x - acc.x) + abs(ppos.y - acc.y)
+              d_next = abs(pos.x - acc.x) + abs(pos.y - acc.y)
+              if d_pend > SPIKE_CONFIRM_DIST and d_next < d_pend:
+                spike_count[slot] = spike_count.get(slot, 0) + 1
+                now = time.monotonic()
+                if now - spike_log.get(slot, 0.0) > 1.0:
+                  spike_log[slot] = now
+                  cloudlog.warning(
+                    f"touch: dropped spike sample slot={slot} held={ppos} next={pos} "
+                    f"acc={acc} count={spike_count[slot]} t={t:.3f}")
+                pending_move[slot] = (pos, t)
+                last_down[slot] = down
+                continue
+            emit(slot, ppos, False, False, True, pt)
+            last_accept[slot] = ppos
+            pending_move[slot] = (pos, t)
         last_down[slot] = down
       for slot in list(slot_raw):
         if not slot_down.get(slot, False):
@@ -453,6 +500,8 @@ class MouseState:
           slot_raw.clear()
           slot_down.clear()
           last_down.clear()
+          pending_move.clear()
+          last_accept.clear()
           cur_slot = 0
           time.sleep(0.1)
       return True
