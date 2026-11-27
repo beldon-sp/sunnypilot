@@ -106,6 +106,15 @@ function launch {
   # write tmux scrollback to a file
   tmux capture-pane -pq -S-1000 > /tmp/launch_log
 
+  # Font atlases (OpFont-*-*.fnt/png) are untracked scons outputs: an overlay
+  # update or git clean can whiteout them. Regenerate (CPU-only) before manager
+  # starts so the UI doesn't re-bake CJK fonts on every boot.
+  if ! ls "$DIR"/openpilot/selfdrive/assets/fonts/OpFont-*-*.* >/dev/null 2>&1; then
+    echo "[fonts] font atlases missing, regenerating"
+    (cd "$DIR" && python3 openpilot/selfdrive/assets/fonts/process.py >> /tmp/font_bake.log 2>&1) ||
+      echo "[warn] font atlas regeneration failed; UI will bake fallbacks at startup"
+  fi
+
   # start manager
   cd openpilot/system/manager
   if [ ! -f "$DIR/prebuilt" ]; then

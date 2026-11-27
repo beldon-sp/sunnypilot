@@ -12,7 +12,7 @@ from openpilot.common.basedir import BASEDIR
 
 
 DIRS = ['openpilot']
-EXTS = ['.png', '.py', '.ttf', '.capnp', '.json', '.fnt', '.mo', '.po']
+EXTS = ['.png', '.py', '.ttf', '.otf', '.capnp', '.json', '.fnt', '.mo', '.po']
 EXCLUDE = ['openpilot/selfdrive/assets/training']
 INTERPRETER = '/usr/bin/env python3'
 

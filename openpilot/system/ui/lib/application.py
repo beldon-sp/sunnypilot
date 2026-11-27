@@ -978,10 +978,12 @@ class GuiApplication(GuiApplicationExt):
   def _load_or_bake_cjk_font(self, language: str) -> rl.Font:
     """Return a ready-to-use CJK font when the pre-baked OpFont atlas is absent.
 
-    The atlas is built from the language's .po translation plus ASCII and common
-    UI symbols, matching the character set used by the normal fallback path.
+    The atlas is built from the language's .po translation plus ASCII, common
+    UI symbols, and the native display names of all supported languages (so the
+    language selector renders 한국어 / ไทย / 中文 etc. regardless of the active language).
     """
     chars = set(map(chr, range(32, 127))) | set(EXTRA_FONT_CHARS)
+    chars.update(multilang.languages.keys())
     try:
       chars.update(TRANSLATIONS_DIR.joinpath(f"app_{language}.po").read_text(encoding="utf-8"))
     except FileNotFoundError:
