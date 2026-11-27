@@ -59,6 +59,14 @@ class GuiScrollPanel2:
     self._velocity = 0.0  # pixels per second
     self._velocity_buffer: deque[float] = deque(maxlen=12 if COMMA_HARDWARE else 6)
     self._enabled: bool | Callable[[], bool] = True
+    # Slot the active gesture started on. The source-level glitch filter in
+    # application.py is per-slot, but a *new* contact (ghost second touch from
+    # panel noise / palm edge) is a fresh press and bypasses it entirely — its
+    # position can be anywhere on the panel. Without pinning, the scroller
+    # would integrate such events as the same finger and leap the content.
+    # Pin to whatever slot started the gesture instead of hardcoding slot 0,
+    # so scrolling still works if a stuck contact occupies slot 0.
+    self._active_slot: int | None = None
 
   def set_enabled(self, enabled: bool | Callable[[], bool]) -> None:
     self._enabled = enabled
@@ -74,8 +82,15 @@ class GuiScrollPanel2:
     bounds_size = bounds.width if self._horizontal else bounds.height
 
     for mouse_event in gui_app.mouse_events:
+      # ignore events from other touch slots while a gesture is active; note
+      # _previous_mouse_event must NOT see them either, or the next delta of
+      # the real finger would be computed against the ghost's position
+      if self._active_slot is not None and mouse_event.slot != self._active_slot:
+        continue
       self._handle_mouse_event(mouse_event, bounds, bounds_size, content_size)
       self._previous_mouse_event = mouse_event
+      if mouse_event.left_released:
+        self._active_slot = None
 
     self._update_state(bounds_size, content_size, snap_target)
 
@@ -158,10 +173,12 @@ class GuiScrollPanel2:
       self._state = ScrollState.STEADY
       self._velocity = 0.0
       self._velocity_buffer.clear()
+      self._active_slot = None
 
     elif self._state == ScrollState.STEADY:
       if rl.check_collision_point_rec(mouse_event.pos, bounds):
         if mouse_event.left_pressed:
+          self._active_slot = mouse_event.slot
           self._state = ScrollState.PRESSED
           self._initial_click_event = mouse_event
 
@@ -241,6 +258,7 @@ class GuiScrollPanel2:
 
     elif self._state == ScrollState.AUTO_SCROLL:
       if mouse_event.left_pressed:
+        self._active_slot = mouse_event.slot
         # Decide whether to click or scroll (block click if moving too fast)
         if abs(self._velocity) <= MIN_VELOCITY_FOR_CLICKING:
           # Traveling slow enough, click

@@ -92,7 +92,13 @@ TOUCH_EVENT_DEVICE = os.getenv("TOUCH_EVENT_DEVICE", "/dev/input/by-path/platfor
 # max plausible movement (raw panel px, Manhattan) between two consecutive
 # touch reports while a finger is down. human flicks peak well under this;
 # ghost/outlier samples from the panel jump by hundreds of px at once.
-TOUCH_GLITCH_JUMP = int(os.getenv("TOUCH_GLITCH_JUMP", "300"))
+# Reject threshold for single-report position jumps, in raw panel px (Manhattan
+# distance between consecutive reports while the finger stays down). The touch
+# controller reports at 140Hz; the most violent human flick (~full 2160px panel
+# height in 150ms) is ~103px per report, so 150 still has ~1.5x headroom while
+# catching the 100-300px ghost samples that used to slip through at 300 and
+# integrate as real scroll deltas ("jump then recover").
+TOUCH_GLITCH_JUMP = int(os.getenv("TOUCH_GLITCH_JUMP", "150"))
 _EV_SYN, _EV_KEY, _EV_ABS = 0x00, 0x01, 0x03
 _SYN_REPORT = 0
 _ABS_MT_SLOT, _ABS_MT_TRACKING_ID, _ABS_MT_POSITION_X, _ABS_MT_POSITION_Y = 0x2f, 0x39, 0x35, 0x36
