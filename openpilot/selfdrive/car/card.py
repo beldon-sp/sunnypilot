@@ -12,7 +12,7 @@ from opendbc.car.structs import car
 from openpilot.common.params import Params
 from openpilot.common.raw_params import get_int_param
 from opendbc.car.byd.radar_interface import SLOT_TABLE_DEFAULT, SLOT_TABLE_LEVEL_MAX
-from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper
+from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper, PeriodicGC
 from openpilot.common.swaglog import cloudlog, ForwardingHandler
 
 from opendbc.car import DT_CTRL, structs
@@ -330,11 +330,16 @@ class Car:
   def card_thread(self):
     e = threading.Event()
     t = threading.Thread(target=self.params_thread, args=(e, ))
+    # capnp builders churned per frame (carState/carOutput/radarTracks/carStateSP) form reference
+    # cycles; config_realtime_process disabled the cyclic GC, so sweep explicitly every ~30 s at
+    # this 100 Hz cadence (see PeriodicGC)
+    periodic_gc = PeriodicGC(every_n_frames=3000)
     try:
       t.start()
       while True:
         self.step()
         self.rk.monitor_time()
+        periodic_gc.tick()
     finally:
       e.set()
       t.join()

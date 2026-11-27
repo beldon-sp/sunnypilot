@@ -9,7 +9,7 @@ from collections import defaultdict
 from openpilot.cereal import log, messaging
 from openpilot.cereal.services import SERVICE_LIST
 from openpilot.common.transformations.orientation import rot_from_euler
-from openpilot.common.realtime import config_realtime_process
+from openpilot.common.realtime import config_realtime_process, PeriodicGC
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.locationd.helpers import rotate_std
@@ -311,6 +311,11 @@ def main():
       P_initial = np.diag(np.array(filter_state.std, dtype=np.float64)) if len(filter_state.std) != 0 else PoseKalman.initial_P
       estimator.reset(None, x_initial, P_initial)
 
+  # capnp builders churned per frame (deviceMotion) form reference cycles; config_realtime_process
+  # disabled the cyclic GC, so sweep explicitly every ~30 s at this 20 Hz cadence (see PeriodicGC).
+  # Memory pressure on this process used to surface as locationdTemporaryError mid-drive.
+  periodic_gc = PeriodicGC(every_n_frames=600)
+
   while True:
     sm.update()
 
@@ -352,6 +357,7 @@ def main():
 
       msg = estimator.get_msg(sensors_valid, inputs_valid, filter_initialized)
       pm.send("deviceMotion", msg)
+      periodic_gc.tick()
 
 
 if __name__ == "__main__":

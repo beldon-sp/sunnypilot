@@ -9,7 +9,7 @@ from openpilot.cereal import messaging, log, custom
 from opendbc.car.structs import car
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
-from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process
+from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process, PeriodicGC
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.simple_kalman import KF1D
 
@@ -316,11 +316,16 @@ def main() -> None:
 
   RD = RadarD(CP, CP_SP, CP.radarDelay)
 
+  # capnp builders churned per frame (radarState) form reference cycles; config_realtime_process
+  # disabled the cyclic GC, so sweep explicitly every ~30 s at this 20 Hz cadence (see PeriodicGC)
+  periodic_gc = PeriodicGC(every_n_frames=600)
+
   while 1:
     sm.update()
 
     RD.update(sm, sm['radarTracks'])
     RD.publish(pm)
+    periodic_gc.tick()
 
 
 if __name__ == "__main__":
