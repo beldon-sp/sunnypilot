@@ -24,9 +24,13 @@ MIN_OKAY_WINDOW_SEC = 25.0
 MIN_RECOVERY_BUFFER_SEC = 2.0
 # 2026-11-22 实车复盘：50mph 门槛把 ~72km/h 的典型巡航全排除，估计器永远
 # unestimated（validBlocks=0），回落 steerActuatorDelay+0.2（BYD=0.5s）。
-# 实测横摆 ~1-1.5Hz 幅度 2-3.6°，与延迟高估的相位过补偿一致。降到 20 m/s
-# 后估计器可在中文高速巡航收敛；数据质量仍由 NCC/confidence/range/std 门把关。
-MIN_VEGO = 20.0
+# 实测横摆 ~1-1.5Hz 幅度 2-3.6°，与延迟高估的相位过补偿一致。
+# 2026-11-27 离线复验（logs/2026-11-22 rlog 2/15/25 + 全程路线）：全程 vEgo
+# max 14.5 m/s（52km/h），门槛 20/19/17 m/s 的 fast 覆盖率均为 0% —— 20 m/s
+# 修复在该路线仍然永远不收敛，且 72km/h 巡航=恰好 20.0 m/s 时 `>` 严格比较
+# 是刀口。降到 12 m/s 覆盖 ~43km/h 以上巡航与全部观测到的 weaving 区间；
+# 数据质量仍由 NCC/confidence/range/std 门把关。
+MIN_VEGO = 12.0
 MIN_ABS_YAW_RATE = 0.0
 MAX_YAW_RATE_SANITY_CHECK = 1.0
 MIN_NCC = 0.95
