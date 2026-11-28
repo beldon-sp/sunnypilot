@@ -744,3 +744,69 @@ carrotmate 用高德路线 API 上行全程几何（3..1024 点），服务端�
 
 - 文件 mtime 新鲜度 30s，坏文件/过期 fail-open 回落 carrotNavi polyline → OSM；
 - 只降不升（SCC-M 软顶语义不变）；导航是行驶态活动，本端点不做 offroad 门控。
+
+## 11. v6.1 增补（additive，PROTOCOL_VERSION 保持 6，kind 集不变）
+
+> 背景：吸收 mouxancnb/webui 四亮点 + 收口 2026-11-15 审查遗留 ②③，方案见
+> `docs/mate-webui-absorb-plan-2026-11-28.md`。
+
+### 11.1 安全语义变更（客户端需知的唯一行为变化）
+
+- **confirm 复查（审查 ② 修复）**：approve 执行前复查 offroad。被拦时
+  broadcast `confirm` 终态 **`blocked_offroad`**（新增），HTTP 返回
+  **409**（onroad）/ **503**（状态未知），`{"ok":false,"status":"blocked_offroad",
+  "command":...}`。confirm 已 pop 不可再执行，客户端关弹窗；想执行需重新
+  发起 `/command`。旧客户端按未知 status 忽略即可。
+- **onroad 三态更保守（审查 ③ 修复）**：`Hub.onroad()` 先查 poller 心跳，
+  超过 2s 未刷即返回"未知"——此前 poller 死后 offroad_only 门控会拿陈旧
+  False 放行，现在一律 503。`/health` 的 `onroad` 字段口径同步。
+- **X-Mate-Auth 提示头**：`/command` 与 `/command/confirm` 响应附带
+  `X-Mate-Auth: none|token`——`none` = MateToken 未配置（当前裸奔状态），
+  客户端 UI 可据此提示用户。MATE_HOST 环境变量可收窄绑定（默认 0.0.0.0）。
+
+### 11.2 `GET /params/schema`
+
+白名单 schema（ParamSpec 数据驱动，加键零代码）：
+
+```json
+{"ok":true,"groups":["navi","slc","mads","long","misc"],
+ "params":{"AutoLaneChangeTimer":{"kind":"int","lo":-1,"hi":5,
+   "offroad_only":true,"group":"slc","desc":"-1=Off 0=Nudge 1=Nudgeless 2..5=0.5/1/2/3s"}, ...}}
+```
+
+新增键 `IsLiveStreaming`（bool，offroad_only=false）：直播旁路开关
+（stream_encoderd + webrtcd，与驾驶路径物理隔离）。
+
+### 11.3 `GET /param_changes` + `GET /param_changes/verify`
+
+- `GET /param_changes?limit=&name=&source=`：参数变更审计记录（新在前）。
+  每条 `{ts,name,prev,next,source,engaged,prev_hash,hash}`；
+  `source` ∈ `param_api`（mate 写 API）/ `command`（命令执行写参）/
+  `device`（车机 UI、拨轮按钮等设备侧漂移）/ `unknown`。
+- `GET /param_changes/verify`：sha256 哈希链重走校验，断链（篡改/半行写坏）
+  报 `{"valid":false,"broken_at":<行序>,"reason":...}`；环形上限 1000 条，
+  裁剪后整体重建链仍可完整验证。
+- 记录文件 `/data/mate/param_changes.jsonl`（`MATE_PARAM_CHANGES_DIR` 可覆盖）。
+
+### 11.4 `GET /webrtc/schema` + `POST /webrtc/offer`
+
+WebRTC 信令中转（本仓 stream_encoderd + webrtcd 均由 `IsLiveStreaming`
+param 门控，mate 只中转 SDP，媒体走 ICE/UDP 浏览器 ↔ webrtcd 点对点）：
+
+- `GET /webrtc/schema`：透传 webrtcd `:5001 /schema`；不可达 503 = 直播未开启。
+- `POST /webrtc/offer` `{"sdp":"...", "camera":"road|wideRoad|driver"}` →
+  SDP answer。camera 可传 topic 名（`roadCameraState`/`wideRoadCameraState`/
+  `driverCameraState`/`cabinCameraState`），非法值回落 `road`。
+- 鉴权 `require_sensitive_auth`（对齐 /command 口径）：行车画面是隐私敏感面。
+
+### 11.5 `GET /ui`（mate UI）
+
+- `/` 与 `/ui` 302 → `/ui/index.html`（`mate/web/` 静态托管，vanilla 无构建链）；
+  web/ 缺席 = 纯 API 模式。
+- token：URL `?token=` 进 → sessionStorage（地址栏抹掉）→ fetch 带 Bearer
+  头、WS 走 `?token=` query；MateToken 未配置无感直进。
+- 五页：状态（/health + /state + WS 事件流）、调参（/params/schema 驱动，
+  offroad_only 键 onroad 锁定）、命令（confirm 弹窗含 blocked_offroad）、
+  审计（/param_changes + verify 徽章）、视频（WebRTC 三路切换）。
+- same-origin 托管：API 不带任何 CORS 头，跨域一律拒（webui CORS 反射
+  漏洞的结构性免疫）。

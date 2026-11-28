@@ -65,7 +65,7 @@ def normalize_source(source) -> str:
 
 def _read_lines() -> list[str]:
   try:
-    with open(PARAM_CHANGES_PATH, "r", encoding="utf-8") as f:
+    with open(PARAM_CHANGES_PATH, encoding="utf-8") as f:
       return [line for line in f.read().splitlines() if line.strip()]
   except OSError:
     return []

@@ -961,7 +961,7 @@ async def health_handler(request: web.Request):
 
 async def _bind_loop(_app: web.Application) -> None:
   hub.loop = asyncio.get_running_loop()
-  asyncio.create_task(_drift_observer(), name="mate-drift-observer")
+  _app["drift_observer_task"] = asyncio.create_task(_drift_observer(), name="mate-drift-observer")
 
 
 def main():

@@ -9,7 +9,7 @@
 环境无 pytest-asyncio/anyio 插件，async 测试体经 asyncio.run() 同步包装。
 """
 import asyncio
-import os
+import json
 
 import pytest
 from aiohttp import web
@@ -59,9 +59,9 @@ class TestHashChain:
     # 篡改中间一条的 next 值
     path = param_changes.PARAM_CHANGES_PATH
     lines = open(path, encoding="utf-8").read().splitlines()
-    record = __import__("json").loads(lines[1])
+    record = json.loads(lines[1])
     record["next"] = 999
-    lines[1] = __import__("json").dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    lines[1] = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
     result = param_changes.verify_param_changes()
     assert result["valid"] is False
@@ -69,7 +69,7 @@ class TestHashChain:
     assert "hash" in result["reason"]
 
   def test_truncation_detected(self, audit_dir):
-    for i in range(4):
+    for _ in range(4):
       param_changes.append_param_change("Mads", False, True, source="param_api")
     path = param_changes.PARAM_CHANGES_PATH
     lines = open(path, encoding="utf-8").read().splitlines()
