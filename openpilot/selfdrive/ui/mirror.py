@@ -17,7 +17,7 @@ import threading
 
 import pyray as rl
 
-from openpilot.common.params import Params
+from openpilot.common.params import Params, UnknownKeyName
 from openpilot.common.swaglog import cloudlog
 
 # 与 mate/server.py 的 UI_MIRROR_PATH / UI_MIRROR_ACTIVE_PATH 保持一致
@@ -41,6 +41,21 @@ class UiMirror:
     self._q: queue.Queue = queue.Queue(maxsize=1)
     threading.Thread(target=self._writer, name="ui-mirror-writer", daemon=True).start()
 
+  def _mirror_enabled(self) -> bool:
+    """UiMirrorEnabled 读取：Params 优先，UnknownKeyName 时回退直读参数文件
+    （raw_params 同款路径——编译注册表不含新 key 的设备上也能生效）。"""
+    try:
+      return self._params.get("UiMirrorEnabled") in (b"true", b"1")
+    except UnknownKeyName:
+      pass
+    except Exception:
+      return False
+    try:
+      with open(self._params.get_param_path("UiMirrorEnabled")) as f:
+        return f.read().strip() in ("1", "true", "True")
+    except OSError:
+      return False
+
   def tick(self, now: float) -> None:
     """UI 渲染循环每帧调用（yield 点，GL 线程）。永不抛异常。"""
     if self._failed:
@@ -48,7 +63,7 @@ class UiMirror:
     try:
       if now - self._param_ts > PARAM_CHECK_S:
         self._param_ts = now
-        self._enabled = self._params.get("UiMirrorEnabled") == b"true"
+        self._enabled = self._mirror_enabled()
       if not self._enabled or (now - self._last_grab) < GRAB_INTERVAL_S:
         return
       self._last_grab = now
