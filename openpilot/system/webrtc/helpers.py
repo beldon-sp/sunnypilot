@@ -35,6 +35,8 @@ def wait_for_webrtcd(max_retries: float = 10) -> None:
       if requests.get(f"http://localhost:{WEBRTCD_PORT}/schema", timeout=1).ok:
         return
     except requests.ConnectionError:
-      attempts += 1
-      time.sleep(0.5)
+      pass
+    # 计数在 try 外：非 200（webrtcd 活着但 /schema 报错）此前会无限循环
+    attempts += 1
+    time.sleep(0.5)
   raise TimeoutError("livestreaming service did not initialize in time.")

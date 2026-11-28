@@ -72,8 +72,12 @@ import asyncio
 import dataclasses
 import datetime
 import hmac
+import math
 import json
 import os
+import re
+import shutil
+import subprocess
 import threading
 import time
 
@@ -161,9 +165,9 @@ def _guard_offroad(*, what: str) -> web.Response | None:
   （读不到状态 = 默认可执行），读不到状态宁可拒服务。返回 None 表示放行。"""
   onroad = hub.onroad()
   if onroad is True:
-    return web.json_response({"ok": False, "error": f"{what} is offroad_only (driving)"}, status=409)
+    return json_response({"ok": False, "error": f"{what} is offroad_only (driving)"}, status=409)
   if onroad is None:
-    return web.json_response({"ok": False, "error": f"{what} is offroad_only but onroad state unknown"}, status=503)
+    return json_response({"ok": False, "error": f"{what} is offroad_only but onroad state unknown"}, status=503)
   return None
 
 
@@ -295,7 +299,7 @@ def _param_out(name: str, raw) -> object:
 async def params_schema_handler(request: web.Request) -> web.Response:
   """GET /params/schema：白名单 schema（V2 调参页按此渲染，加键零前端改动）。"""
   check_auth(request)
-  return web.json_response({"ok": True, "groups": PARAM_GROUPS, "params": {
+  return json_response({"ok": True, "groups": PARAM_GROUPS, "params": {
     name: dataclasses.asdict(spec) for name, spec in sorted(PARAMS_WHITELIST.items())
   }})
 
@@ -303,10 +307,10 @@ async def params_schema_handler(request: web.Request) -> web.Response:
 async def params_read_handler(request: web.Request) -> web.Response:
   names = [n for n in (request.query.get("names") or "").split(",") if n]
   if not names:
-    return web.json_response({"ok": False, "error": "names required"}, status=400)
+    return json_response({"ok": False, "error": "names required"}, status=400)
   unknown = [n for n in names if not _param_readable(n)]
   if unknown:
-    return web.json_response({"ok": False, "error": f"keys not allowed: {','.join(unknown)}"}, status=403)
+    return json_response({"ok": False, "error": f"keys not allowed: {','.join(unknown)}"}, status=403)
   params = Params()
   values = {}
   for name in names:
@@ -315,7 +319,7 @@ async def params_read_handler(request: web.Request) -> web.Response:
     except Exception:
       raw = None
     values[name] = _param_out(name, raw)
-  return web.json_response({"ok": True, "values": values})
+  return json_response({"ok": True, "values": values})
 
 
 async def param_set_handler(request: web.Request) -> web.Response:
@@ -323,17 +327,17 @@ async def param_set_handler(request: web.Request) -> web.Response:
   try:
     body = await request.json()
   except Exception:
-    return web.json_response({"ok": False, "error": "body must be json"}, status=400)
+    return json_response({"ok": False, "error": "body must be json"}, status=400)
   name, value = body.get("name"), body.get("value")
   if not _param_readable(name):
-    return web.json_response({"ok": False, "error": f"key not allowed: {name}"}, status=403)
+    return json_response({"ok": False, "error": f"key not allowed: {name}"}, status=403)
   offroad_reject = _param_check_offroad(name)
   if offroad_reject is not None:
     return offroad_reject
   try:
     coerced = _param_coerce(name, value)
   except ValueError as e:
-    return web.json_response({"ok": False, "error": str(e)}, status=400)
+    return json_response({"ok": False, "error": str(e)}, status=400)
   try:
     prev_raw = Params().get(name)
   except Exception:
@@ -341,7 +345,7 @@ async def param_set_handler(request: web.Request) -> web.Response:
   try:
     Params().put(name, coerced, block=True)
   except Exception as e:
-    return web.json_response({"ok": False, "error": f"param put failed: {e}"}, status=500)
+    return json_response({"ok": False, "error": f"param put failed: {e}"}, status=500)
   # 审计记账（v6.1 W3）：append 永不抛异常，失败不影响本次写入
   param_changes.append_param_change(name, _param_out(name, prev_raw), coerced,
                                     source="param_api", engaged=hub.onroad())
@@ -350,7 +354,7 @@ async def param_set_handler(request: web.Request) -> web.Response:
     echo = _param_out(name, Params().get(name))
   except Exception:
     echo = coerced
-  return web.json_response({"ok": True, "name": name, "value": echo})
+  return json_response({"ok": True, "name": name, "value": echo})
 
 
 # ── v6 动作命令通道（/command + /command/confirm）──────────────────────
@@ -484,21 +488,21 @@ async def command_handler(request: web.Request) -> web.Response:
   try:
     body = await request.json()
   except Exception:
-    return web.json_response({"ok": False, "error": "body must be json"}, status=400)
+    return json_response({"ok": False, "error": "body must be json"}, status=400)
   name = body.get("command")
   if name not in COMMANDS:
-    return web.json_response({"ok": False, "error": f"unknown command: {name}"}, status=400)
+    return json_response({"ok": False, "error": f"unknown command: {name}"}, status=400)
   offroad_reject = _command_check_offroad(name)
   if offroad_reject is not None:
     return offroad_reject
   if COMMANDS[name]["confirm"]:
     pending = _create_confirm(name)
-    return web.json_response({"ok": True, "status": "pending", "confirm": pending})
+    return json_response({"ok": True, "status": "pending", "confirm": pending})
   try:
     detail = await asyncio.to_thread(_EXECUTORS[name])
   except Exception as e:
-    return web.json_response({"ok": False, "error": f"command failed: {e}"}, status=500)
-  return web.json_response({"ok": True, "status": "executed", "command": name, "detail": detail})
+    return json_response({"ok": False, "error": f"command failed: {e}"}, status=500)
+  return json_response({"ok": True, "status": "executed", "command": name, "detail": detail})
 
 
 async def command_confirm_handler(request: web.Request) -> web.Response:
@@ -506,20 +510,20 @@ async def command_confirm_handler(request: web.Request) -> web.Response:
   try:
     body = await request.json()
   except Exception:
-    return web.json_response({"ok": False, "error": "body must be json"}, status=400)
+    return json_response({"ok": False, "error": "body must be json"}, status=400)
   confirm_id, approve = body.get("id"), body.get("approve")
   if not confirm_id or not isinstance(approve, bool):
-    return web.json_response({"ok": False, "error": "id and approve(bool) required"}, status=400)
+    return json_response({"ok": False, "error": "id and approve(bool) required"}, status=400)
   record = _pop_confirm(confirm_id)
   if record is None:
-    return web.json_response({"ok": False, "error": "unknown confirm id"}, status=404)
+    return json_response({"ok": False, "error": "unknown confirm id"}, status=404)
   if record.get("expired"):
     _resolve_confirm(confirm_id, "expired")
-    return web.json_response({"ok": False, "error": "confirm expired (default deny)"}, status=410)
+    return json_response({"ok": False, "error": "confirm expired (default deny)"}, status=410)
   command = record["command"]
   if not approve:
     _resolve_confirm(confirm_id, "denied")
-    return web.json_response({"ok": True, "status": "denied", "command": command})
+    return json_response({"ok": True, "status": "denied", "command": command})
   # v6.1 TOCTOU 复查（修 2026-11-15 审查 ②）：发起时 offroad ≠ 批准时 offroad，
   # pending 窗口内车辆可能已 onroad，approve 执行前必须再过一遍门控。
   # 被拦即 broadcast blocked_offroad 终态；confirm 已 pop 不再可执行，
@@ -528,15 +532,15 @@ async def command_confirm_handler(request: web.Request) -> web.Response:
   if offroad_reject is not None:
     _resolve_confirm(confirm_id, "blocked_offroad")
     # 状态码沿用守卫口径：onroad 409 / 状态未知 503
-    return web.json_response(
+    return json_response(
       {"ok": False, "status": "blocked_offroad", "command": command,
        "error": "command is offroad_only at approval time"}, status=offroad_reject.status)
   _resolve_confirm(confirm_id, "approved")
   try:
     detail = await asyncio.to_thread(_EXECUTORS[command])
   except Exception as e:
-    return web.json_response({"ok": False, "error": f"command failed: {e}"}, status=500)
-  return web.json_response({"ok": True, "status": "executed", "command": command, "detail": detail})
+    return json_response({"ok": False, "error": f"command failed: {e}"}, status=500)
+  return json_response({"ok": True, "status": "executed", "command": command, "detail": detail})
 
 
 # ── v6 路线几何上行（/route_geometry）──────────────────────────────────
@@ -578,16 +582,16 @@ async def route_geometry_handler(request: web.Request) -> web.Response:
   try:
     body = await request.json()
   except Exception:
-    return web.json_response({"ok": False, "error": "body must be json"}, status=400)
+    return json_response({"ok": False, "error": "body must be json"}, status=400)
   points = body.get("points")
   if not isinstance(points, list):
-    return web.json_response({"ok": False, "error": "points must be a list"}, status=400)
+    return json_response({"ok": False, "error": "points must be a list"}, status=400)
   if not (GEOMETRY_MIN_POINTS <= len(points) <= GEOMETRY_MAX_POINTS):
-    return web.json_response({"ok": False, "error": f"points size must be {GEOMETRY_MIN_POINTS}..{GEOMETRY_MAX_POINTS}"}, status=400)
+    return json_response({"ok": False, "error": f"points size must be {GEOMETRY_MIN_POINTS}..{GEOMETRY_MAX_POINTS}"}, status=400)
   try:
     norm = _norm_geometry_points(points)
   except ValueError as e:
-    return web.json_response({"ok": False, "error": str(e)}, status=400)
+    return json_response({"ok": False, "error": str(e)}, status=400)
   seq = body.get("sequence")
   seq = int(seq) if isinstance(seq, (int, float)) and not isinstance(seq, bool) else int(wallclock())
   path = geometry_path()
@@ -595,8 +599,8 @@ async def route_geometry_handler(request: web.Request) -> web.Response:
   try:
     await asyncio.to_thread(_atomic_write_json, path, payload)
   except OSError as e:
-    return web.json_response({"ok": False, "error": f"write failed: {e}"}, status=500)
-  return web.json_response({"ok": True, "points": len(norm), "sequence": seq})
+    return json_response({"ok": False, "error": f"write failed: {e}"}, status=500)
+  return json_response({"ok": True, "points": len(norm), "sequence": seq})
 
 
 def _atomic_write_json(path: str, payload: dict) -> None:
@@ -616,17 +620,17 @@ async def param_changes_handler(request: web.Request) -> web.Response:
   try:
     limit = max(0, int(request.query.get("limit") or 0))
   except ValueError:
-    return web.json_response({"ok": False, "error": "limit must be int"}, status=400)
+    return json_response({"ok": False, "error": "limit must be int"}, status=400)
   records = param_changes.read_param_changes(
     limit=limit, name=request.query.get("name") or "", source=request.query.get("source") or "")
-  return web.json_response({"ok": True, "count": len(records), "records": records})
+  return json_response({"ok": True, "count": len(records), "records": records})
 
 
 async def param_changes_verify_handler(request: web.Request) -> web.Response:
   """GET /param_changes/verify：哈希链重走校验；断链报 broken_at + reason
   （截断 / 篡改 / 半行写坏都定位到第一条不可信记录）。"""
   check_auth(request)
-  return web.json_response(param_changes.verify_param_changes())
+  return json_response(param_changes.verify_param_changes())
 
 
 def _read_whitelist_values(keys: list[str]) -> dict:
@@ -683,10 +687,74 @@ def _normalize_camera(camera) -> str:
   return cam if cam in WEBRTC_CAMERAS else "road"
 
 
+def _wakeup_livestream() -> None:
+  """v6.3.1 自愈：webrtcd 在上游语义里是一次性开关——任一 stream session 结束
+  5 秒后无活跃流即自写 IsLiveStreaming=false（webrtcd.py schedule_teardown），
+  行车中 manager 随即杀掉 webrtcd + stream_encoderd，视频页从此永远 502。
+  用户在视频页明确点「开始」= 重新授权的开启意图：置回参数并记审计，
+  由随后的 wait_for_webrtcd 轮询等 manager 拉起（秒级）。仅 offer 路径触发；
+  /webrtc/schema 是切页探测，不带起三进程链。"""
+  params = Params()
+  prev = params.get_bool("IsLiveStreaming")
+  if not prev:
+    params.put_bool("IsLiveStreaming", True, block=True)  # 必须落盘可见——随后 manager 轮询门控靠它拉起进程
+    param_changes.append_param_change("IsLiveStreaming", prev, True,
+                                      source="webrtc_offer_autoup", engaged=hub.onroad())
+
+
+# ── v6.3.1 mDNS 候选改写 ──────────────────────────────────────────────
+# iOS Safari / Android Chrome 的 WebRTC offer 只带 xxxx.local 形式的 mDNS
+# 候选（苹果/谷歌的隐私匿名化，设备侧无法关闭）。本仓 webrtcd 引擎是
+# libdatachannel——不做 mDNS 解析 → ICE 拿不到对端地址 → DTLS 连不上 →
+# 「已应答但黑屏」（2026-11-29 手机 Safari 实锤：offer_candidates 全 .local）。
+# 修法：offer 转发前借设备上的 avahi-resolve 把能解析的名字换成 IPv4 写回
+# SDP；解析不到保留原样（行为与改动前一致，最坏还是黑屏而非更坏）。
+# avahi 是 tici rootfs 自带进程（comma 镜像自带 SSH/mDNS 通告），非 mate 依赖。
+_MDNS_NAME_RE = re.compile(r"candidate:\S+ 1 udp \d+ ([A-Za-z0-9-]+\.local) ")
+_AVAHI_TIMEOUT_S = 3.0
+
+
+def _resolve_mdns(name: str) -> str | None:
+  try:
+    out = subprocess.run([_AVAHI_BIN, "-n", name], capture_output=True,
+                         text=True, timeout=_AVAHI_TIMEOUT_S)
+  except (OSError, subprocess.TimeoutExpired):
+    return None
+  if out.returncode != 0:
+    return None
+  # 输出 "name\tIPv4"（也可能先出 IPv6 行，v6.3.1 只关心同网段 IPv4）
+  for line in out.stdout.splitlines():
+    parts = line.split("\t")
+    if len(parts) == 2 and re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", parts[1].strip()):
+      return parts[1].strip()
+  return None
+
+
+_AVAHI_BIN = shutil.which("avahi-resolve") or ""
+
+
+def _rewrite_mdns_candidates(sdp: str) -> tuple[str, dict[str, str]]:
+  """返回 (改写后 sdp, {name: ip} 解析映射)。无 .local 候选时原样返回。"""
+  resolved: dict[str, str] = {}
+  for name in dict.fromkeys(_MDNS_NAME_RE.findall(sdp)):  # 保序去重，通常 ≤2 个
+    ip = _resolve_mdns(name) if _AVAHI_BIN else None
+    if ip:
+      resolved[name] = ip
+  sdp_out = sdp
+  for name, ip in resolved.items():
+    sdp_out = sdp_out.replace(name, ip)
+  return sdp_out, resolved
+
+
 def _post_webrtc_offer(sdp: str, camera: str) -> dict:
-  """阻塞信令转发：等 webrtcd 就绪后 POST SDP offer 换 answer（线程池跑）。"""
+  """阻塞信令转发：等 webrtcd 就绪后 POST SDP offer 换 answer（线程池跑）。
+  不可达时自愈一次（直播参数被上游 teardown 关掉的情形）。"""
   from openpilot.system.webrtc.helpers import StreamRequestBody, post_stream_request, wait_for_webrtcd
-  wait_for_webrtcd(max_retries=4)
+  try:
+    wait_for_webrtcd(max_retries=4)
+  except TimeoutError:
+    _wakeup_livestream()
+    wait_for_webrtcd(max_retries=24)  # ≈12s：manager 轮询 + webrtcd 冷启动
   body = StreamRequestBody(
     sdp=sdp, cameras=[camera], enabled=True, bridge_services_in=[], bridge_services_out=[])
   return post_stream_request(body)
@@ -706,10 +774,10 @@ async def webrtc_schema_handler(request: web.Request) -> web.Response:
   try:
     status, schema = await _fetch_webrtcd_schema()
   except Exception as e:
-    return web.json_response({"ok": False, "error": f"webrtcd unreachable: {e}", "port": WEBRTCD_PORT}, status=503)
+    return json_response({"ok": False, "error": f"webrtcd unreachable: {e}", "port": WEBRTCD_PORT}, status=503)
   if status == 200 and schema is not None:
-    return web.json_response({"ok": True, "schema": schema, "port": WEBRTCD_PORT})
-  return web.json_response({"ok": False, "error": f"webrtcd http {status}", "port": WEBRTCD_PORT}, status=502)
+    return json_response({"ok": True, "schema": schema, "port": WEBRTCD_PORT})
+  return json_response({"ok": False, "error": f"webrtcd http {status}", "port": WEBRTCD_PORT}, status=502)
 
 
 async def ui_mirror_snapshot_handler(request: web.Request) -> web.Response:
@@ -719,7 +787,7 @@ async def ui_mirror_snapshot_handler(request: web.Request) -> web.Response:
   try:
     data = await asyncio.to_thread(_read_ui_mirror_frame)
   except OSError:
-    return web.json_response({"ok": False, "error": "ui mirror not active"}, status=503)
+    return json_response({"ok": False, "error": "ui mirror not active"}, status=503)
   return web.Response(body=data, content_type="image/png",
                       headers={"Cache-Control": "no-store"})
 
@@ -731,16 +799,22 @@ async def webrtc_offer_handler(request: web.Request) -> web.Response:
   try:
     body = await request.json()
   except Exception:
-    return web.json_response({"ok": False, "error": "body must be json"}, status=400)
+    return json_response({"ok": False, "error": "body must be json"}, status=400)
   sdp = body.get("sdp")
   if not isinstance(sdp, str) or not sdp.strip():
-    return web.json_response({"ok": False, "error": "sdp required"}, status=400)
+    return json_response({"ok": False, "error": "sdp required"}, status=400)
   camera = _normalize_camera(body.get("camera"))
+  # mDNS(.local) 候选改写：iOS/Android 浏览器 offer 只有 .local，libdatachannel
+  # 不解析 → 必黑屏。转发前用 avahi 换成 IPv4（见 _rewrite_mdns_candidates）。
+  sdp, mdns_resolved = await asyncio.to_thread(_rewrite_mdns_candidates, sdp)
+  if ".local" in sdp:
+    cloudlog.event("mate webrtc mdns unresolved", names=sdp.count(".local"), camera=camera)
   try:
     result = await asyncio.to_thread(_post_webrtc_offer, sdp, camera)
   except Exception as e:
-    return web.json_response({"ok": False, "error": str(e), "camera": camera}, status=502)
-  return web.json_response({"ok": True, "camera": camera, **result})
+    return json_response({"ok": False, "error": str(e), "camera": camera,
+                          "mdns_resolved": mdns_resolved}, status=502)
+  return json_response({"ok": True, "camera": camera, "mdns_resolved": mdns_resolved, **result})
 
 
 # ── v6.1 V2 mate UI（同端口托管，same-origin 消灭 CORS 面）────────────
@@ -774,11 +848,53 @@ async def auth_middleware(request: web.Request, handler) -> web.StreamResponse:
   resp = await handler(request)
   if request.path.startswith("/command"):
     resp.headers["X-Mate-Auth"] = "none" if read_token() is None else "token"
+  if request.path.startswith("/ui") and isinstance(resp, web.FileResponse):
+    # web.static 不带缓存头——手机浏览器启发式缓存会吃旧 app.js/index.html，
+    # 服务端修好了页面还报旧错。UI 是排障工具，实时性优先于省流量。
+    resp.headers["Cache-Control"] = "no-store"
   return resp
 
 
 async def ui_index_handler(request: web.Request) -> web.Response:
   raise web.HTTPFound("/ui/index.html")
+
+
+# ── JSON 序列化收口（v6.3.1）：NaN/Infinity 消毒 ──────────────────────
+# 数据源可携带 float("nan")——实车复现：GPS 未定位时 liveLocationKalman 的
+# posGeodetic/velNED std 三元组全 NaN，进 loc 快照段后 json.dumps 默认
+# allow_nan=True 输出裸 NaN。裸 NaN/Infinity 不是合法 JSON：浏览器
+# JSON.parse 直接抛，/state 表现为「Cannot read properties of null
+# (reading 'data')」，WS frame/snapshot 消息被 onmessage 静默吞掉。
+# 收口方式：先严格模式序列化（allow_nan=False，常见路径零开销），仅在
+# 违例时递归 sanitize 一遍（NaN/Inf → None，客户端按缺值处理）。
+def _sanitize_json(obj):
+  if isinstance(obj, float) and not math.isfinite(obj):
+    return None
+  if isinstance(obj, dict):
+    return {k: _sanitize_json(v) for k, v in obj.items()}
+  if isinstance(obj, (list, tuple)):
+    return [_sanitize_json(v) for v in obj]
+  return obj
+
+
+def _json_dumps(obj, **kwargs) -> str:
+  kwargs.setdefault("ensure_ascii", False)
+  kwargs["allow_nan"] = False
+  try:
+    return json.dumps(obj, **kwargs)
+  except ValueError:
+    return json.dumps(_sanitize_json(obj), **kwargs)
+
+
+def json_response(obj, **kwargs):
+  """web.json_response 收口版：全模块 JSON 出口统一走 _json_dumps。
+  no-store：/state 等响应必须实时（曾出现浏览器启发式缓存吃到旧体，
+  NaN 消毒修好后页面仍报「Cannot read properties of null」）。"""
+  kwargs.setdefault("dumps", _json_dumps)
+  headers = dict(kwargs.pop("headers", None) or {})
+  headers.setdefault("Cache-Control", "no-store")
+  kwargs["headers"] = headers
+  return web.json_response(obj, **kwargs)
 
 
 class Hub:
@@ -859,7 +975,7 @@ class Hub:
 
   def emit(self, kind: str, data: dict) -> None:
     """任意线程可调。events/sound 同时维护补发快照；STATE_KINDS 进 /state。"""
-    payload = json.dumps({"type": kind, "data": data}, ensure_ascii=False)
+    payload = _json_dumps({"type": kind, "data": data}, ensure_ascii=False)
     if kind in STATE_KINDS:
       self.set_state(kind, data)
     if kind in REPLAY_KINDS:
@@ -899,7 +1015,7 @@ hub = Hub()
 async def ws_reject(ws: web.WebSocketResponse) -> None:
   """WS 鉴权失败：完成升级后发 error 帧再关闭——客户端（carrotmate 的 AuthFailed
   分支）按消息语义处理，而非笼统的连接失败。"""
-  await ws.send_str(json.dumps({"type": "error", "data": {"msg": "invalid token"}}, ensure_ascii=False))
+  await ws.send_str(_json_dumps({"type": "error", "data": {"msg": "invalid token"}}, ensure_ascii=False))
   await ws.close()
 
 
@@ -913,7 +1029,7 @@ async def ws_handler(request: web.Request):
   kinds = set(ALL_KINDS)
   q = hub.add_client(kinds)
   cloudlog.event("mate ws connected", n=len(hub.clients))
-  await ws.send_str(json.dumps({
+  await ws.send_str(_json_dumps({
     "type": "hello",
     "data": {"service": "mate", "version": PROTOCOL_VERSION, "flavor": FLAVOR, "port": PORT, "kinds": list(ALL_KINDS)},
   }, ensure_ascii=False))
@@ -942,9 +1058,9 @@ async def ws_handler(request: web.Request):
         picked = {k for k in req.get("kinds", []) if k in ALL_KINDS}
         kinds.clear()
         kinds.update(picked or ALL_KINDS)
-        await ws.send_str(json.dumps({"type": "subscribed", "data": {"kinds": sorted(kinds)}}))
+        await ws.send_str(_json_dumps({"type": "subscribed", "data": {"kinds": sorted(kinds)}}))
       elif rtype == "snapshot":
-        await ws.send_str(json.dumps({"type": "snapshot", "data": hub.state_snapshot()}, ensure_ascii=False))
+        await ws.send_str(_json_dumps({"type": "snapshot", "data": hub.state_snapshot()}, ensure_ascii=False))
       elif rtype == "mirror":
         # v6.2 屏幕镜像订阅开关。enable=true 时首个消费者触碰 .active 哨兵
         # 文件，UI 侧（UiMirrorEnabled 参数开启时）据此开始抓帧。
@@ -953,9 +1069,9 @@ async def ws_handler(request: web.Request):
           hub.add_mirror_consumer(q)
         else:
           hub.remove_mirror_consumer(q)
-        await ws.send_str(json.dumps({"type": "mirrorState", "data": {"enabled": enable}}, ensure_ascii=False))
+        await ws.send_str(_json_dumps({"type": "mirrorState", "data": {"enabled": enable}}, ensure_ascii=False))
       elif rtype == "ping":
-        await ws.send_str(json.dumps({"type": "pong", "data": {"ts": time.monotonic()}}))
+        await ws.send_str(_json_dumps({"type": "pong", "data": {"ts": time.monotonic()}}))
       # 未知消息忽略
   except (ConnectionResetError, RuntimeError):
     pass
@@ -1017,12 +1133,12 @@ async def state_handler(request: web.Request):
   未收到过的数据段不出现；data 全空时看 meta（poller 是否活着）与 services
   （哪个 topic 见过数据）定位原因。car 段在 offroad 后保持最后一次 onroad 状态并随 ts 变旧。"""
   check_auth(request)
-  return web.json_response(hub.state_snapshot())
+  return json_response(hub.state_snapshot())
 
 
 async def health_handler(request: web.Request):
   age = hub.poller_age()
-  return web.json_response({
+  return json_response({
     "ok": age is not None and age < POLLER_STALE_S,
     "service": "mate",
     "uptime": round(time.monotonic() - hub.start_time, 1),

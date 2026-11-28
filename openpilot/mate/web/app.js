@@ -28,11 +28,19 @@ function api(path, opts = {}) {
   if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
   return fetch(path, init).then(async (resp) => {
     let data = null;
-    try { data = await resp.json(); } catch { /* 非 JSON 响应忽略 */ }
+    let parsed = false;
+    try { data = await resp.json(); parsed = true; } catch { /* 非 JSON 响应 */ }
     if (!resp.ok) {
       const err = new Error((data && data.error) || ('HTTP ' + resp.status));
       err.status = resp.status;
       err.data = data;
+      throw err;
+    }
+    if (!parsed) {
+      // 200 但响应体不是合法 JSON（如服务端漏出裸 NaN）——显式报错，
+      // 不再让调用方拿着 null 解引用出天书 TypeError
+      const err = new Error('响应不是合法 JSON（HTTP ' + resp.status + '）');
+      err.status = resp.status;
       throw err;
     }
     return data;
@@ -164,7 +172,7 @@ pollHealth();
 async function loadStatusPage() {
   try {
     const snap = await api('/state');
-    renderSnapshots(snap.data || {});
+    renderSnapshots((snap && snap.data) || {});
   } catch (e) { toast('拉取 /state 失败：' + e.message, true); }
 }
 
