@@ -1093,6 +1093,8 @@ def main():
     web.get("/param_changes/verify", param_changes_verify_handler),
     web.get("/", ui_index_handler),
     web.get("/ui", ui_index_handler),
+    # 带斜杠 /ui/ 同走 302（web.static 无 index_name，目录直达默认 403——v6.3 修）
+    web.get("/ui/", ui_index_handler),
   ]
   if os.path.isdir(UI_DIR):  # 纯 API 模式（web/ 缺席）零开销
     routes.append(web.static("/ui/", UI_DIR))

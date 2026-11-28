@@ -1,13 +1,14 @@
 """mate UI 托管与鉴权中间件测试（v6.1 V2 + 决策点 1=A）。
 
 - /ui/index.html：token 未配置可直进；已配置则中间件门禁（401）
-- / 与 /ui：302 → /ui/index.html
+- /、/ui 与 /ui/：302 → /ui/index.html（v6.3：带斜杠不再 403）
 - /command 系响应 X-Mate-Auth 提示头：none（裸奔）/ token（已上锁）
 - 纯 API 模式：UI_DIR 逻辑仅覆盖 main()，此处测真实 web/ 目录
 
 环境无 pytest-asyncio/anyio 插件，async 测试体经 asyncio.run() 同步包装。
 """
 import asyncio
+import os
 
 import pytest
 from aiohttp import web
@@ -21,6 +22,7 @@ def _app() -> web.Application:
   app.add_routes([
     web.get("/", server.ui_index_handler),
     web.get("/ui", server.ui_index_handler),
+    web.get("/ui/", server.ui_index_handler),
     web.post("/command", server.command_handler),
   ])
   if server.UI_DIR:
@@ -67,15 +69,21 @@ class TestUiHosting:
 
   def test_root_and_ui_redirect(self, monkeypatch):
     monkeypatch.setattr(server, "read_token", lambda: None)
+    has_static = bool(server.UI_DIR) and os.path.isdir(server.UI_DIR)
 
     async def body():
       client = TestClient(TestServer(_app()))
       await client.start_server()
       try:
-        for path in ("/", "/ui"):
+        # v6.3：带斜杠 /ui/ 也走 302——web.static 无 index_name，此前目录直达 403
+        for path in ("/", "/ui", "/ui/"):
           resp = await client.get(path, allow_redirects=False)
           assert resp.status == 302
           assert resp.headers["Location"] == "/ui/index.html"
+        if has_static:
+          resp = await client.get("/ui/", allow_redirects=True)
+          assert resp.status == 200
+          assert b"<!DOCTYPE html>" in (await resp.read())[:200]
       finally:
         await client.close()
 
