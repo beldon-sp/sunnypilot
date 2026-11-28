@@ -23,6 +23,21 @@ mate — 车机事件实时推送服务（局域网）
 
 WS 客户端也可发 {"type":"snapshot"} 走同一条连接拿快照。协议文档见 mate/API.md。
 
+v6.1（当前，PROTOCOL_VERSION 保持 6 的 additive 修订，kind 集不变）：
+- 安全收口：集中 _guard_offroad 门控 + confirm approve 执行前复查（被拦
+  broadcast blocked_offroad 终态，修 2026-11-15 审查 ② TOCTOU）；
+  Hub.onroad() 先查 poller 心跳，超 POLLER_STALE_S 视为状态未知（修审查 ③）。
+- param_changes 哈希链审计（mate/param_changes.py）：/param_changes 与
+  /param_changes/verify；param_api / command / device / unknown 四来源；
+  漂移观察 2s 节流旁路（车机 UI/按钮直写 Params 也入账）。
+- 白名单 ParamSpec schema 化：/params/schema（UI 按此渲染）；
+  IsLiveStreaming 入白名单（offroad_only=False）。
+- WebRTC 信令代理：/webrtc/schema + /webrtc/offer（中转 localhost:5001
+  webrtcd，媒体点对点不经过 mate；require_sensitive_auth 鉴权）。
+- mate UI：/ui 静态托管（mate/web/，vanilla 无构建链；web/ 缺席 = 纯 API
+  模式）+ auth_middleware；/command 系响应带 X-Mate-Auth 提示头
+  （token 未配置 = none，决策点 1=A）；MATE_HOST 可配绑定（默认 0.0.0.0）。
+
 协议 v6（当前，PROTOCOL_VERSION = 6，FLAVOR = "sunnypilot"）：kind 集
 events/opstate/button/sound/frame/confirm 不变（v6 新增 confirm，见下）；
 hello 带 fork 标识 flavor（客户端门控主键，非本 fork 的客户端按协议不匹配处理）；
@@ -70,6 +85,7 @@ from openpilot.mate import param_changes
 from openpilot.mate.poller import MatePoller
 
 PORT = int(os.environ.get("MATE_PORT", "8083"))
+HOST = os.environ.get("MATE_HOST", "0.0.0.0")  # 决策点 1=A：可收窄（如 127.0.0.1 + ssh 隧道）
 PROTOCOL_VERSION = 6  # v6：新增 confirm kind、/command、/command/confirm、/route_geometry 与 offroad_only 写门控
 FLAVOR = "sunnypilot"  # 上游 fork 标识：sunnypilot / carrotpilot，客户端据此区分数据面差异（如 carrotMan、SP 段的有无）
 ALL_KINDS = ("events", "opstate", "button", "sound", "frame", "confirm")
@@ -711,6 +727,30 @@ async def webrtc_offer_handler(request: web.Request) -> web.Response:
   return web.json_response({"ok": True, "camera": camera, **result})
 
 
+# ── v6.1 V2 mate UI（同端口托管，same-origin 消灭 CORS 面）────────────
+# UI_DIR 不存在时跳过静态路由（纯 API 模式零开销）。API handler 自带
+# check_auth / require_sensitive_auth；静态资产无 handler 级门控，由
+# auth_middleware 统一收口。API 一律不带 CORS 头 = 跨域一律拒。
+UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+
+
+@web.middleware
+async def auth_middleware(request: web.Request, handler) -> web.StreamResponse:
+  """静态资产（/ui/*）鉴权收口：MateToken 已配置则全部门禁一致。
+  /command 系响应附带 X-Mate-Auth 提示头（决策点 1=A）：token 未配置时
+  为 none，客户端可感知当前是否处于裸奔状态。"""
+  if request.path.startswith("/ui") and not auth_ok(request):
+    raise web.HTTPUnauthorized(text='{"error":"invalid token"}', content_type="application/json")
+  resp = await handler(request)
+  if request.path.startswith("/command"):
+    resp.headers["X-Mate-Auth"] = "none" if read_token() is None else "token"
+  return resp
+
+
+async def ui_index_handler(request: web.Request) -> web.Response:
+  raise web.HTTPFound("/ui/index.html")
+
+
 class Hub:
   """poller 线程 -> 事件循环 -> 各客户端队列的广播中心，并维护最新状态快照。"""
 
@@ -932,9 +972,9 @@ def main():
 
   threading.Thread(target=MatePoller(hub.emit, hub.set_state).run, name="mate-poller", daemon=True).start()
 
-  app = web.Application()
+  app = web.Application(middlewares=[auth_middleware])
   app.on_startup.append(_bind_loop)
-  app.add_routes([
+  routes = [
     web.get("/ws", ws_handler),
     web.get("/stream", sse_handler),
     web.get("/state", state_handler),
@@ -950,9 +990,14 @@ def main():
     web.post("/webrtc/offer", webrtc_offer_handler),
     web.get("/param_changes", param_changes_handler),
     web.get("/param_changes/verify", param_changes_verify_handler),
-  ])
-  cloudlog.event("mate listening", port=PORT)
-  web.run_app(app, host="0.0.0.0", port=PORT, print=None)
+    web.get("/", ui_index_handler),
+    web.get("/ui", ui_index_handler),
+  ]
+  if os.path.isdir(UI_DIR):  # 纯 API 模式（web/ 缺席）零开销
+    routes.append(web.static("/ui/", UI_DIR))
+  app.add_routes(routes)
+  cloudlog.event("mate listening", port=PORT, host=HOST)
+  web.run_app(app, host=HOST, port=PORT, print=None)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mate 车机面板</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">mate <span class="ver" id="proto-ver"></span></div>
+    <nav id="tabs">
+      <button class="tab active" data-page="status">状态</button>
+      <button class="tab" data-page="params">调参</button>
+      <button class="tab" data-page="commands">命令</button>
+      <button class="tab" data-page="audit">审计</button>
+      <button class="tab" data-page="video">视频</button>
+    </nav>
+    <div class="badges">
+      <span class="badge" id="badge-onroad">—</span>
+      <span class="badge" id="badge-poller">—</span>
+      <span class="badge" id="badge-ws">WS 未连</span>
+      <span class="badge" id="badge-clients"></span>
+    </div>
+  </header>
+
+  <main>
+    <!-- 状态页 -->
+    <section id="page-status" class="page active">
+      <div class="grid2">
+        <div class="card">
+          <h3>运行状态</h3>
+          <dl class="kv" id="health-kv"><dt>health</dt><dd>加载中…</dd></dl>
+        </div>
+        <div class="card">
+          <h3>驾驶状态（opstate）</h3>
+          <dl class="kv" id="opstate-kv"></dl>
+        </div>
+        <div class="card">
+          <h3>车辆 / 雷达（frame 2Hz）</h3>
+          <dl class="kv" id="frame-kv"><dt>—</dt><dd>等待 frame…</dd></dl>
+        </div>
+        <div class="card">
+          <h3>实时告警（events）</h3>
+          <ul class="events" id="events-active"></ul>
+          <h4>事件日志</h4>
+          <ul class="events log" id="events-log"></ul>
+        </div>
+        <div class="card wide">
+          <h3>快照段（/state 19 段，点击展开）</h3>
+          <div id="snapshots"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 调参页 -->
+    <section id="page-params" class="page">
+      <div class="toolbar">
+        <span id="params-summary"></span>
+        <button id="params-refresh">刷新</button>
+      </div>
+      <div id="param-groups"></div>
+    </section>
+
+    <!-- 命令页 -->
+    <section id="page-commands" class="page">
+      <div class="grid3" id="command-cards"></div>
+      <p class="hint">全部命令 offroad_only：行车中或状态未知时一律拒绝（409/503）。
+      需确认命令在批准时刻复查 offroad，行车中批准会被拦截（blocked_offroad）。</p>
+    </section>
+
+    <!-- 审计页 -->
+    <section id="page-audit" class="page">
+      <div class="toolbar">
+        <span class="badge" id="audit-verify">—</span>
+        <input id="audit-name" placeholder="key 过滤">
+        <select id="audit-source">
+          <option value="">全部来源</option>
+          <option value="param_api">param_api</option>
+          <option value="command">command</option>
+          <option value="device">device</option>
+        </select>
+        <input id="audit-limit" type="number" value="50" min="1" max="1000">
+        <button id="audit-refresh">查询</button>
+      </div>
+      <table class="audit" id="audit-table">
+        <thead><tr><th>时间</th><th>key</th><th>prev → next</th><th>来源</th><th>onroad</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- 视频页 -->
+    <section id="page-video" class="page">
+      <div class="toolbar">
+        <select id="video-camera">
+          <option value="road">前视主摄（road）</option>
+          <option value="wideRoad">前视广角（wideRoad）</option>
+          <option value="driver">驾驶员（driver）</option>
+        </select>
+        <button id="video-start">开始</button>
+        <button id="video-stop">停止</button>
+        <span id="video-status"></span>
+      </div>
+      <video id="video-el" autoplay playsinline muted></video>
+      <p class="hint">直播旁路由 IsLiveStreaming 参数门控（stream_encoderd + webrtcd，
+      与驾驶路径物理隔离）。schema 不可达 = 直播未开启。</p>
+    </section>
+  </main>
+
+  <!-- confirm 弹窗（WS confirm kind 驱动） -->
+  <div id="confirm-overlay" class="hidden">
+    <div class="modal">
+      <h3 id="confirm-title">确认操作</h3>
+      <p id="confirm-desc"></p>
+      <p class="countdown" id="confirm-countdown"></p>
+      <div class="modal-actions">
+        <button id="confirm-deny" class="danger">拒绝</button>
+        <button id="confirm-approve" class="primary">批准执行</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>
