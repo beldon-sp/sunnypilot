@@ -329,5 +329,84 @@ class TestClearLogsExec:
     assert not old.exists() and new.exists() and not old_crash.exists()
 
 
+class TestConfirmOffroadRecheck:
+  """v6.1 TOCTOU 复查（审查 ②）：发起时 offroad ≠ 批准时 offroad，
+  approve 执行前必须复查；被拦 broadcast blocked_offroad 终态且不执行。"""
+
+  def test_onroad_at_approval_blocks_execution(self, tokened, monkeypatch):
+    calls = []
+    monkeypatch.setitem(server._EXECUTORS, "clear_logs", lambda: calls.append(1) or "")
+    stub = _HubStub(onroad=False)
+    monkeypatch.setattr(server, "hub", stub)
+
+    async def body():
+      client = TestClient(TestServer(_app()))
+      await client.start_server()
+      try:
+        resp = await _post(client, "/command", {"command": "clear_logs"})
+        confirm_id = (await resp.json())["confirm"]["id"]
+        # pending 窗口内车辆 onroad（TOCTOU 场景本体）
+        stub._onroad = True
+        resp = await _post(client, "/command/confirm", {"id": confirm_id, "approve": True})
+        assert resp.status == 409
+        data = await resp.json()
+        assert data["status"] == "blocked_offroad"
+        assert calls == []  # executor 未执行
+        assert hub_emitted_last(stub)["status"] == "blocked_offroad"
+        # confirm 已 pop：重新确认 → 404
+        resp = await _post(client, "/command/confirm", {"id": confirm_id, "approve": True})
+        assert resp.status == 404
+      finally:
+        await client.close()
+
+    _run(body())
+
+  def test_state_unknown_at_approval_503(self, tokened, monkeypatch):
+    calls = []
+    monkeypatch.setitem(server._EXECUTORS, "clear_logs", lambda: calls.append(1) or "")
+    stub = _HubStub(onroad=False)
+    monkeypatch.setattr(server, "hub", stub)
+
+    async def body():
+      client = TestClient(TestServer(_app()))
+      await client.start_server()
+      try:
+        resp = await _post(client, "/command", {"command": "clear_logs"})
+        confirm_id = (await resp.json())["confirm"]["id"]
+        stub._onroad = None  # poller 死了 → 状态未知 → 拒
+        resp = await _post(client, "/command/confirm", {"id": confirm_id, "approve": True})
+        assert resp.status == 503
+        assert calls == []
+        assert hub_emitted_last(stub)["status"] == "blocked_offroad"
+      finally:
+        await client.close()
+
+    _run(body())
+
+  def test_offroad_at_approval_still_executes(self, hub_offroad, tokened, monkeypatch):
+    # 回归：批准时刻仍 offroad → 全链路照常执行
+    calls = []
+    monkeypatch.setitem(server._EXECUTORS, "clear_logs", lambda: calls.append(1) or "")
+
+    async def body():
+      client = TestClient(TestServer(_app()))
+      await client.start_server()
+      try:
+        resp = await _post(client, "/command", {"command": "clear_logs"})
+        confirm_id = (await resp.json())["confirm"]["id"]
+        resp = await _post(client, "/command/confirm", {"id": confirm_id, "approve": True})
+        assert resp.status == 200
+        assert calls == [1]
+        assert hub_offroad.emitted[-1][1]["status"] == "approved"
+      finally:
+        await client.close()
+
+    _run(body())
+
+
+def hub_emitted_last(stub):
+  return stub.emitted[-1][1]
+
+
 if __name__ == "__main__":
   pytest.main([__file__])

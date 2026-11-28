@@ -115,6 +115,19 @@ class TestHubServiceState:
     assert snap["data"]["panda"]["data"] == {"count": 0, "pandas": []}
     assert snap["data"]["radar"]["data"]["leadOne"]["status"] is False
 
+  def test_onroad_stale_meta_returns_unknown(self):
+    # v6.1（审查 ③）：poller 线程死后 meta 残留最后值，若停机时 offroad，
+    # offroad_only 门控会拿陈旧 False 放行——超 POLLER_STALE_S 未刷即视为未知
+    hub = Hub()
+    hub.set_state("meta", {"frame": 1, "onroad": False})
+    assert hub.onroad() is False
+    # 手动把 meta ts 拨旧（模拟 poller 死亡）
+    hub.snapshot["meta"]["ts"] = server.wallclock() - (server.POLLER_STALE_S + 0.5)
+    assert hub.onroad() is None  # 未知 → 门控按 503 拒
+    # 心跳恢复即回到正常三态
+    hub.set_state("meta", {"frame": 2, "onroad": False})
+    assert hub.onroad() is False
+
 
 class TestWsAuth:
   def test_auth_failure_sends_error_frame_then_closes(self, monkeypatch):

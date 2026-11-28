@@ -134,6 +134,19 @@ def check_auth(request: web.BaseRequest) -> None:
     raise web.HTTPUnauthorized(text='{"error":"invalid token"}', content_type="application/json")
 
 
+def _guard_offroad(*, what: str) -> web.Response | None:
+  """集中 offroad 门控（v6.1，webui offroad_guard 的形状 + mate「未知即拒」口径）：
+  onroad 拒（409），onroad 状态未知拒（503）。param 写与命令执行（含 confirm
+  批准时刻）共用这一个三态判断——明确不采纳 webui 的 except→False fail-open
+  （读不到状态 = 默认可执行），读不到状态宁可拒服务。返回 None 表示放行。"""
+  onroad = hub.onroad()
+  if onroad is True:
+    return web.json_response({"ok": False, "error": f"{what} is offroad_only (driving)"}, status=409)
+  if onroad is None:
+    return web.json_response({"ok": False, "error": f"{what} is offroad_only but onroad state unknown"}, status=503)
+  return None
+
+
 # ── params 读写（#6 双向控制 + v6 白名单扩容）──────────────────────────
 # 读：白名单内任意 key；写：白名单 + MateToken 鉴权 + offroad_only 门控。
 # 响应形状对齐 CarrotPilot 7000 carrot_server 契约（{ok, values} / {ok, name, value}），
@@ -185,12 +198,7 @@ def _param_check_offroad(name: str) -> web.Response | None:
   状态未知时宁可拒服务也不放行——「宁可迟钝不可错记」。返回 None 表示放行。"""
   if not PARAMS_WHITELIST[name][3]:
     return None
-  onroad = hub.onroad()
-  if onroad is True:
-    return web.json_response({"ok": False, "error": f"{name} is offroad_only (driving)"}, status=409)
-  if onroad is None:
-    return web.json_response({"ok": False, "error": f"{name} is offroad_only but onroad state unknown"}, status=503)
-  return None
+  return _guard_offroad(what=name)
 
 
 def _param_coerce(name: str, value) -> object:
@@ -333,12 +341,7 @@ def _command_check_offroad(name: str) -> web.Response | None:
   """命令的 offroad 门控：onroad 拒执行（409），状态未知拒执行（503）。"""
   if not COMMANDS[name]["offroad_only"]:
     return None
-  onroad = hub.onroad()
-  if onroad is True:
-    return web.json_response({"ok": False, "error": f"command {name} is offroad_only (driving)"}, status=409)
-  if onroad is None:
-    return web.json_response({"ok": False, "error": f"command {name} is offroad_only but onroad state unknown"}, status=503)
-  return None
+  return _guard_offroad(what=f"command {name}")
 
 
 def _exec_trigger_backup() -> str:
@@ -458,6 +461,17 @@ async def command_confirm_handler(request: web.Request) -> web.Response:
   if not approve:
     _resolve_confirm(confirm_id, "denied")
     return web.json_response({"ok": True, "status": "denied", "command": command})
+  # v6.1 TOCTOU 复查（修 2026-11-15 审查 ②）：发起时 offroad ≠ 批准时 offroad，
+  # pending 窗口内车辆可能已 onroad，approve 执行前必须再过一遍门控。
+  # 被拦即 broadcast blocked_offroad 终态；confirm 已 pop 不再可执行，
+  # 客户端想执行需重新发起 /command（重新过入口门控）。
+  offroad_reject = _command_check_offroad(command)
+  if offroad_reject is not None:
+    _resolve_confirm(confirm_id, "blocked_offroad")
+    # 状态码沿用守卫口径：onroad 409 / 状态未知 503
+    return web.json_response(
+      {"ok": False, "status": "blocked_offroad", "command": command,
+       "error": "command is offroad_only at approval time"}, status=offroad_reject.status)
   _resolve_confirm(confirm_id, "approved")
   try:
     detail = await asyncio.to_thread(_EXECUTORS[command])
@@ -568,9 +582,17 @@ class Hub:
     return max(0.0, round(wallclock() - meta["ts"], 1))
 
   def onroad(self) -> bool | None:
+    """onroad 三态：True/False/None（未知）。v6.1 起先查 poller 心跳——
+    poller 线程死后 meta 残留最后一次写入值，若停机时是 offroad，所有
+    offroad_only 门控会拿陈旧 False 放行（2026-11-15 审查 ③）；
+    超 POLLER_STALE_S 未刷即视为状态未知，调用方按 503 拒。"""
     with self._snapshot_lock:
       meta = self.snapshot.get("meta")
-    return None if meta is None else bool(meta["data"].get("onroad"))
+    if meta is None:
+      return None
+    if wallclock() - meta["ts"] > POLLER_STALE_S:
+      return None
+    return bool(meta["data"].get("onroad"))
 
   def emit(self, kind: str, data: dict) -> None:
     """任意线程可调。events/sound 同时维护补发快照；STATE_KINDS 进 /state。"""
