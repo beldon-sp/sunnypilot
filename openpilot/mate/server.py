@@ -60,7 +60,7 @@ import os
 import threading
 import time
 
-from aiohttp import web, WSMsgType
+from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params
@@ -637,6 +637,80 @@ async def _drift_observer():
       cloudlog.exception("mate drift observer failed")
 
 
+# ── v6.1 V1 WebRTC 视频流代理（webrtcd 信令中转）──────────────────────
+# webui 并没有自己的视频实现——它只是代理 localhost:5001 的 webrtcd。
+# 本仓基建全齐：stream_encoderd（H.264 直播旁路）+ webrtcd 均由 IsLiveStreaming
+# param 门控（system/manager/process_config.py），mate 只需中转信令。
+# 红线（webui WEBRTC_OPTIMIZATION.md §1.1）：不为直播改感知/控制进程、
+# encoderd 主路与 camerad 采集参数——本代理层天然不碰。
+# 鉴权走 require_sensitive_auth（对齐 /command 口径）：行车画面（尤其 driver
+# 摄像头）是隐私敏感面。媒体面走 ICE/UDP 点对点（浏览器 ↔ webrtcd），
+# mate 只中转 SDP，不碰媒体。
+WEBRTCD_PORT = 5001
+WEBRTC_CAMERAS = ("road", "wideRoad", "driver")
+_WEBRTC_CAMERA_ALIASES = {
+  "roadCameraState": "road",
+  "narrowRoadCameraState": "road",
+  "wideRoadCameraState": "wideRoad",
+  "driverCameraState": "driver",
+  "cabinCameraState": "driver",
+}
+
+
+def _normalize_camera(camera) -> str:
+  """客户端可传 topic 名或短名；非法值回落 road（不信任输入）。"""
+  cam = _WEBRTC_CAMERA_ALIASES.get(str(camera or ""), str(camera or ""))
+  return cam if cam in WEBRTC_CAMERAS else "road"
+
+
+def _post_webrtc_offer(sdp: str, camera: str) -> dict:
+  """阻塞信令转发：等 webrtcd 就绪后 POST SDP offer 换 answer（线程池跑）。"""
+  from openpilot.system.webrtc.helpers import StreamRequestBody, post_stream_request, wait_for_webrtcd
+  wait_for_webrtcd(max_retries=4)
+  body = StreamRequestBody(
+    sdp=sdp, cameras=[camera], enabled=True, bridge_services_in=[], bridge_services_out=[])
+  return post_stream_request(body)
+
+
+async def _fetch_webrtcd_schema() -> tuple[int, dict | None]:
+  async with ClientSession() as sess:
+    async with sess.get(f"http://127.0.0.1:{WEBRTCD_PORT}/schema",
+                        timeout=ClientTimeout(total=3)) as resp:
+      return resp.status, (await resp.json() if resp.ok else None)
+
+
+async def webrtc_schema_handler(request: web.Request) -> web.Response:
+  """GET /webrtc/schema：透传 webrtcd /schema。不可达 = 直播未开启
+  （IsLiveStreaming 未设或进程未起），客户端据此引导用户开直播。"""
+  require_sensitive_auth(request)
+  try:
+    status, schema = await _fetch_webrtcd_schema()
+  except Exception as e:
+    return web.json_response({"ok": False, "error": f"webrtcd unreachable: {e}", "port": WEBRTCD_PORT}, status=503)
+  if status == 200 and schema is not None:
+    return web.json_response({"ok": True, "schema": schema, "port": WEBRTCD_PORT})
+  return web.json_response({"ok": False, "error": f"webrtcd http {status}", "port": WEBRTCD_PORT}, status=502)
+
+
+async def webrtc_offer_handler(request: web.Request) -> web.Response:
+  """POST /webrtc/offer {"sdp": "...", "camera": "road|wideRoad|driver"} →
+  SDP answer。信令面 3 秒级超时；webrtcd 未就绪报 502。"""
+  require_sensitive_auth(request)
+  try:
+    body = await request.json()
+  except Exception:
+    return web.json_response({"ok": False, "error": "body must be json"}, status=400)
+  sdp = body.get("sdp")
+  if not isinstance(sdp, str) or not sdp.strip():
+    return web.json_response({"ok": False, "error": "sdp required"}, status=400)
+  camera = _normalize_camera(body.get("camera"))
+  try:
+    result = await asyncio.to_thread(_post_webrtc_offer, sdp, camera)
+  except Exception as e:
+    return web.json_response({"ok": False, "error": str(e), "camera": camera}, status=502)
+  return web.json_response({"ok": True, "camera": camera, **result})
+
+
 class Hub:
   """poller 线程 -> 事件循环 -> 各客户端队列的广播中心，并维护最新状态快照。"""
 
@@ -872,6 +946,8 @@ def main():
     web.post("/command", command_handler),
     web.post("/command/confirm", command_confirm_handler),
     web.post("/route_geometry", route_geometry_handler),
+    web.get("/webrtc/schema", webrtc_schema_handler),
+    web.post("/webrtc/offer", webrtc_offer_handler),
     web.get("/param_changes", param_changes_handler),
     web.get("/param_changes/verify", param_changes_verify_handler),
   ])
