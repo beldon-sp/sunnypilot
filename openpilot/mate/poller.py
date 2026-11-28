@@ -284,6 +284,13 @@ class RoadLineGate:
     return self.ok
 
 
+def _roundz(v: float, nd: int) -> float:
+  """round + 负零归一（-0.0 + 0.0 → +0.0）：直行 lead 的 y/heading 恰为 0 时
+  IEEE 产生 -0.0，Python 相等性无害但部分语言格式化出「-0.0」负号显示。"""
+  r = round(float(v), nd)
+  return r + 0.0 if r == 0 else r
+
+
 def _interp_at_dists(xs, ys, dists: tuple = ROAD_DISTS) -> list | None:
   """(xs, ys) 序列线性插值到 dists 栅格，两位小数。序列 <2 点返回 None；
   栅格点落在序列范围外输出 None（本仓 x 栅格保证不发生，仅防御）。"""
@@ -300,7 +307,7 @@ def _interp_at_dists(xs, ys, dists: tuple = ROAD_DISTS) -> list | None:
         t = 0.0 if span < 1e-6 else (d - x0) / span
         val = float(ys[i]) + t * (float(ys[i + 1]) - float(ys[i]))
         break
-    out.append(round(val, 2) if val is not None else None)
+    out.append(_roundz(val, 2) if val is not None else None)
   return out
 
 
@@ -312,7 +319,7 @@ def _lane_centers(lines: list) -> list:
   for k in range(len(ROAD_DISTS)):
     left = [l[k] for l in lines if l is not None and l[k] is not None and l[k] > 0.2]
     right = [l[k] for l in lines if l is not None and l[k] is not None and l[k] < -0.2]
-    out.append(round((min(left) + max(right)) / 2.0, 2) if left and right else None)
+    out.append(_roundz((min(left) + max(right)) / 2.0, 2) if left and right else None)
   return out
 
 
@@ -336,15 +343,15 @@ def _road_leads(leads) -> list[dict]:
       dx = float(xs[1]) - float(xs[0])
       dy = -(float(ys[1]) - float(ys[0]))
       if abs(dx) > 1e-3 or abs(dy) > 1e-3:
-        heading = round(atan2(dy, dx), 3)
+        heading = _roundz(atan2(dy, dx), 3)
     out.append({
-      "d": round(d0, 1),
-      "y": round(-float(ys[0]), 2),
-      "prob": round(prob, 2),
-      "v": _first(l.v, 2),
-      "a": _first(l.a, 2),
-      "xStd": _first(l.xStd, 3),
-      "yStd": _first(l.yStd, 3),
+      "d": _roundz(d0, 1),
+      "y": _roundz(-float(ys[0]), 2),
+      "prob": _roundz(prob, 2),
+      "v": _roundz(_first(l.v, 2), 2),
+      "a": _roundz(_first(l.a, 2), 2),
+      "xStd": _roundz(_first(l.xStd, 3), 3),
+      "yStd": _roundz(_first(l.yStd, 3), 3),
       "heading": heading,
     })
   out.sort(key=lambda o: o["d"])

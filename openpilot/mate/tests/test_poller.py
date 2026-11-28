@@ -1,4 +1,5 @@
 import json
+import math
 import time
 
 from openpilot.cereal import car, custom, log
@@ -421,6 +422,18 @@ class TestRoadSample:
     assert road["pathStd"] == [0.6] * 7
     road = road_sample(self._msg(([-1.8] * 33,), [0.9] * 4), RoadLineGate())
     assert road["pathStd"] is None
+
+  def test_negative_zero_normalized(self):
+    # 设备实测（2026-11-28 注入验证）曾输出 "y": -0.0 / "heading": -0.0——
+    # 直行 lead y=0、对称车道 laneCenters=0 都会触发；客户端格式化会出现负号
+    ld = {"prob": 0.8, "x": [30.0, 32.0], "y": [0.0, 0.0], "v": [0.0, 0.0],
+          "a": [0.0, 0.0], "xStd": [0.0, 0.0], "yStd": [1.0, 1.0]}
+    lines_y = ([-1.8] * 33, [1.8] * 33)  # 输出 +1.8 / -1.8 → 中心 0
+    road = road_sample(self._msg(lines_y, [0.9, 0.9, 0.9, 0.9], leads=[ld]), RoadLineGate())
+    lead = road["leads"][0]
+    for k in ("y", "v", "a", "xStd", "heading"):
+      assert not (lead[k] == 0 and math.copysign(1, lead[k]) < 0), f"{k} 出现 -0.0"
+    assert all(not (c == 0 and math.copysign(1, c) < 0) for c in road["laneCenters"])
 
   def test_frame_snapshot_same_object(self):
     # 同源同函数：road_sample 单次产物同时进 frame 窗口与快照（poller 主循环）
