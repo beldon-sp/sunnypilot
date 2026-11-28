@@ -52,6 +52,7 @@ Authorization: Bearer xxx。白名单外的 key 走 /data/params/d 文件直读�
   PythonProcess("mate", "openpilot.mate.server", always_run, restart_if_crash=True)
 """
 import asyncio
+import dataclasses
 import datetime
 import hmac
 import json
@@ -148,45 +149,62 @@ def _guard_offroad(*, what: str) -> web.Response | None:
   return None
 
 
-# ── params 读写（#6 双向控制 + v6 白名单扩容）──────────────────────────
+# ── params 读写（#6 双向控制 + v6.1 W4 schema 化）──────────────────────
 # 读：白名单内任意 key；写：白名单 + MateToken 鉴权 + offroad_only 门控。
 # 响应形状对齐 CarrotPilot 7000 carrot_server 契约（{ok, values} / {ok, name, value}），
 # carrotmate 端 CarrotParamClient 可按同一解析逻辑对接任一端口。
 #
-# 白名单条目：(kind, lo, hi, offroad_only)
-# - kind：bool / int / float（None 表示无值域约束）
+# 白名单条目 ParamSpec（webui panel_catalog 思想，v6.1 起数据驱动）：
+# - kind：bool / int / float（lo/hi 为 None 表示无值域约束）
 # - offroad_only=True 的键在 onroad（或 onroad 状态未知）时一律拒写——这些参数
 #   直接改变控车行为，远程改写必须停车操作（controls-safety 门禁）。
 #   v5 既有 8 键保持任意时刻可写（兼容既有客户端行为）。
-PARAMS_WHITELIST: dict[str, tuple[str, float | None, float | None, bool]] = {
-  # 导航变道闸门（carrotmate 上行，fail-open）
-  "NaviGuidedLaneChangeEnabled": ("bool", None, None, False),
-  "NaviLaneChangeDirectionEnabled": ("bool", None, None, False),  # 拨杆方向冲突抑制（默认关）
-  "NaviLaneChangeTurnDistance": ("int", 0, 2000, False),        # meters
-  "NaviLaneChangeCrossroadDistance": ("int", 0, 2000, False),   # meters
-  "NaviLaneChangeSignalDistance": ("int", 0, 2000, False),      # meters, crossroad 缺席时红绿灯兜底
-  "NaviLaneChangeDirectionDistance": ("int", 0, 2000, False),   # meters, 方向冲突窗口
-  # 匝道/弯道曲率预减速（SCC-M 数据源仲裁，默认关）
-  "CarrotRouteCurvatureEnabled": ("bool", None, None, False),
-  # 兼容既有通道（cem 实验模式开关）
-  "ExperimentalMode": ("bool", None, None, False),
-  # ── v6 控车相关扩容（全部 offroad_only）──
-  # 自动变道（selfdrive/controls/lib/auto_lane_change.py）
-  "AutoLaneChangeTimer": ("int", -1, 5, True),        # -1=Off 0=Nudge 1=Nudgeless 2..5=0.5/1/2/3s
-  "AutoLaneChangeBsmDelay": ("bool", None, None, True),
-  "LaneTurnDesire": ("bool", None, None, True),       # 低速打灯变道
-  "LaneTurnValue": ("float", 0, 100, True),           # 低速阈值（mph，默认 19）
-  # MADS（sunnypilot）
-  "Mads": ("bool", None, None, True),
-  "MadsMainCruiseAllowed": ("bool", None, None, True),
-  "MadsSteeringMode": ("int", 0, 2, True),
-  "MadsUnifiedEngagementMode": ("bool", None, None, True),
-  # 纵向 / 巡航
-  "LongitudinalPersonality": ("int", 0, 2, True),     # 0=relaxed 1=standard 2=rapid
-  "SpeedLimitMode": ("int", 0, 2, True),
-  "SmartCruiseControlMap": ("bool", None, None, True),
-  "SmartCruiseControlVision": ("bool", None, None, True),
-  "IntelligentCruiseButtonManagement": ("bool", None, None, True),
+# - group：navi（导航变道闸门）/ slc（自动变道）/ mads / long（纵向巡航）/
+#   misc；调参 UI（V2 M1）按 group 分组渲染，审计按 group 过滤——M1 依赖它，
+#   不是预留字段。
+# - desc：行内说明，UI 直接展示。
+# 加键 = 加一行数据，门控/coerce/审计/UI 渲染零代码改动。
+@dataclasses.dataclass(frozen=True)
+class ParamSpec:
+  kind: str                  # bool / int / float
+  lo: float | None
+  hi: float | None
+  offroad_only: bool
+  group: str                 # navi / slc / mads / long / misc
+  desc: str
+
+
+PARAM_GROUPS = ("navi", "slc", "mads", "long", "misc")
+
+PARAMS_WHITELIST: dict[str, ParamSpec] = {
+  # ── navi：导航变道闸门（carrotmate 上行，fail-open）──
+  "NaviGuidedLaneChangeEnabled": ParamSpec("bool", None, None, False, "navi", "导航引导变道总开关"),
+  "NaviLaneChangeDirectionEnabled": ParamSpec("bool", None, None, False, "navi", "拨杆方向冲突抑制"),
+  "NaviLaneChangeTurnDistance": ParamSpec("int", 0, 2000, False, "navi", "转弯提前变道距离 (m)"),
+  "NaviLaneChangeCrossroadDistance": ParamSpec("int", 0, 2000, False, "navi", "路口提前变道距离 (m)"),
+  "NaviLaneChangeSignalDistance": ParamSpec("int", 0, 2000, False, "navi", "红绿灯提前变道距离 (m)，路口缺席时兜底"),
+  "NaviLaneChangeDirectionDistance": ParamSpec("int", 0, 2000, False, "navi", "方向冲突窗口距离 (m)"),
+  "CarrotRouteCurvatureEnabled": ParamSpec("bool", None, None, False, "navi", "匝道/弯道曲率预减速（SCC-M）"),
+  # ── slc：自动变道（selfdrive/controls/lib/auto_lane_change.py）──
+  "AutoLaneChangeTimer": ParamSpec("int", -1, 5, True, "slc", "-1=Off 0=Nudge 1=Nudgeless 2..5=0.5/1/2/3s"),
+  "AutoLaneChangeBsmDelay": ParamSpec("bool", None, None, True, "slc", "BSM 阻断变道延时"),
+  "LaneTurnDesire": ParamSpec("bool", None, None, True, "slc", "低速打灯变道"),
+  "LaneTurnValue": ParamSpec("float", 0, 100, True, "slc", "低速阈值 (mph，默认 19)"),
+  # ── mads ──
+  "Mads": ParamSpec("bool", None, None, True, "mads", "MADS 总开关"),
+  "MadsMainCruiseAllowed": ParamSpec("bool", None, None, True, "mads", "允许主巡航"),
+  "MadsSteeringMode": ParamSpec("int", 0, 2, True, "mads", "转向模式"),
+  "MadsUnifiedEngagementMode": ParamSpec("bool", None, None, True, "mads", "统一接管模式"),
+  # ── long：纵向 / 巡航 ──
+  "LongitudinalPersonality": ParamSpec("int", 0, 2, True, "long", "0=relaxed 1=standard 2=rapid"),
+  "SpeedLimitMode": ParamSpec("int", 0, 2, True, "long", "限速模式"),
+  "SmartCruiseControlMap": ParamSpec("bool", None, None, True, "long", "地图 SCC"),
+  "SmartCruiseControlVision": ParamSpec("bool", None, None, True, "long", "视觉 SCC"),
+  "IntelligentCruiseButtonManagement": ParamSpec("bool", None, None, True, "long", "智能巡航按键管理"),
+  # ── misc ──
+  "ExperimentalMode": ParamSpec("bool", None, None, False, "misc", "cem 实验模式"),
+  "IsLiveStreaming": ParamSpec("bool", None, None, False, "misc",
+                               "直播旁路开关（拉起 stream_encoderd+webrtcd；旁路与驾驶路径物理隔离）"),
 }
 
 
@@ -197,7 +215,7 @@ def _param_readable(name: str) -> bool:
 def _param_check_offroad(name: str) -> web.Response | None:
   """offroad_only 键的写前门控：onroad 拒写（409），onroad 状态未知也拒写（503）。
   状态未知时宁可拒服务也不放行——「宁可迟钝不可错记」。返回 None 表示放行。"""
-  if not PARAMS_WHITELIST[name][3]:
+  if not PARAMS_WHITELIST[name].offroad_only:
     return None
   return _guard_offroad(what=name)
 
@@ -208,8 +226,8 @@ def _param_coerce(name: str, value) -> object:
   BOOL 键宽容归一（真布尔 / 1|0 / "true"|"false"），兼容 carrotmate 现有
   value:1|0 的 carrot 7000 请求形态与 mate 的 value:true|false 形态。
   """
-  kind, lo, hi, _ = PARAMS_WHITELIST[name]
-  if kind == "bool":
+  spec = PARAMS_WHITELIST[name]
+  if spec.kind == "bool":
     if isinstance(value, bool):
       return value
     if isinstance(value, int) and value in (0, 1):
@@ -219,26 +237,26 @@ def _param_coerce(name: str, value) -> object:
     if isinstance(value, str) and value.strip().lower() in ("false", "0"):
       return False
     raise ValueError(f"{name} 需要 bool")
-  if kind == "int":
+  if spec.kind == "int":
     if isinstance(value, bool) or not isinstance(value, (int, float)):
       raise ValueError(f"{name} 需要 int")
     iv = int(value)
-    if (lo is not None and iv < lo) or (hi is not None and iv > hi):
-      raise ValueError(f"{name} 超出 [{lo}, {hi}]")
+    if (spec.lo is not None and iv < spec.lo) or (spec.hi is not None and iv > spec.hi):
+      raise ValueError(f"{name} 超出 [{spec.lo}, {spec.hi}]")
     return iv
-  if kind == "float":
+  if spec.kind == "float":
     if isinstance(value, bool) or not isinstance(value, (int, float)):
       raise ValueError(f"{name} 需要 float")
     fv = float(value)
-    if (lo is not None and fv < lo) or (hi is not None and fv > hi):
-      raise ValueError(f"{name} 超出 [{lo}, {hi}]")
+    if (spec.lo is not None and fv < spec.lo) or (spec.hi is not None and fv > spec.hi):
+      raise ValueError(f"{name} 超出 [{spec.lo}, {spec.hi}]")
     return fv
   raise ValueError(f"{name} 类型不支持写入")
 
 
 def _param_out(name: str, raw) -> object:
   """读出口归一：BOOL 键回真布尔，INT 键回整数，FLOAT 键回浮点，异常路径回 None。"""
-  kind = PARAMS_WHITELIST[name][0]
+  kind = PARAMS_WHITELIST[name].kind
   try:
     if isinstance(raw, (bytes, bytearray)):
       raw = raw.decode("utf-8", "ignore").strip()
@@ -252,6 +270,14 @@ def _param_out(name: str, raw) -> object:
   except (TypeError, ValueError):
     return None
   return raw
+
+
+async def params_schema_handler(request: web.Request) -> web.Response:
+  """GET /params/schema：白名单 schema（V2 调参页按此渲染，加键零前端改动）。"""
+  check_auth(request)
+  return web.json_response({"ok": True, "groups": PARAM_GROUPS, "params": {
+    name: dataclasses.asdict(spec) for name, spec in sorted(PARAMS_WHITELIST.items())
+  }})
 
 
 async def params_read_handler(request: web.Request) -> web.Response:
@@ -841,6 +867,7 @@ def main():
     web.get("/health", health_handler),
     web.get("/sounds/{filename}", sounds_handler),
     web.get("/params", params_read_handler),
+    web.get("/params/schema", params_schema_handler),
     web.post("/param_set", param_set_handler),
     web.post("/command", command_handler),
     web.post("/command/confirm", command_confirm_handler),

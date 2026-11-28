@@ -21,6 +21,7 @@ def _app() -> web.Application:
   app = web.Application()
   app.add_routes([
     web.get("/params", server.params_read_handler),
+    web.get("/params/schema", server.params_schema_handler),
     web.post("/param_set", server.param_set_handler),
   ])
   return app
@@ -187,9 +188,9 @@ class TestWhitelistShape:
                 "MadsUnifiedEngagementMode", "LongitudinalPersonality", "SpeedLimitMode",
                 "SmartCruiseControlMap", "SmartCruiseControlVision",
                 "IntelligentCruiseButtonManagement"):
-      entry = server.PARAMS_WHITELIST[key]
-      assert entry[0] in ("bool", "int", "float")
-      assert entry[3] is True, f"{key} 必须标注 offroad_only"
+      spec = server.PARAMS_WHITELIST[key]
+      assert spec.kind in ("bool", "int", "float")
+      assert spec.offroad_only is True, f"{key} 必须标注 offroad_only"
 
   def test_v5_keys_remain_anytime_writable(self):
     # 兼容既有客户端：v5 8 键不得改为 offroad_only
@@ -197,12 +198,12 @@ class TestWhitelistShape:
                 "NaviLaneChangeTurnDistance", "NaviLaneChangeCrossroadDistance",
                 "NaviLaneChangeSignalDistance", "NaviLaneChangeDirectionDistance",
                 "CarrotRouteCurvatureEnabled", "ExperimentalMode"):
-      assert server.PARAMS_WHITELIST[key][3] is False
+      assert server.PARAMS_WHITELIST[key].offroad_only is False
 
   def test_no_other_params_leak(self):
     # 防扩散：白名单严格收敛，不得混入无关 key
     assert "MateToken" not in server.PARAMS_WHITELIST
-    assert len(server.PARAMS_WHITELIST) == 21
+    assert len(server.PARAMS_WHITELIST) == 22  # 21 既有键 + IsLiveStreaming（v6.1 V1）
 
   def test_no_credential_like_keys(self):
     # 凭据类键永远不得进入白名单（写通道只对控行为）
@@ -309,6 +310,45 @@ class TestIntRangeV6:
         assert resp.status == 200
         resp = await client.post("/param_set", json={"name": "AutoLaneChangeTimer", "value": 6})
         assert resp.status == 400
+      finally:
+        await client.close()
+
+    _run(body())
+
+
+class TestWhitelistSchema:
+  """v6.1 W4 schema 化元测试：白名单本身的结构完整性。"""
+
+  def test_spec_integrity(self):
+    assert len(server.PARAMS_WHITELIST) == 22  # 21 既有键 + IsLiveStreaming
+    for name, spec in server.PARAMS_WHITELIST.items():
+      assert spec.kind in ("bool", "int", "float"), name
+      assert spec.group in server.PARAM_GROUPS, name
+      assert spec.desc, f"{name} 缺 desc（UI 行内说明用）"
+      if spec.lo is not None and spec.hi is not None:
+        assert spec.lo <= spec.hi, name
+    # 控车键必须 offroad_only（controls-safety 门禁不许回退）
+    for name in ("AutoLaneChangeTimer", "Mads", "LongitudinalPersonality"):
+      assert server.PARAMS_WHITELIST[name].offroad_only is True, name
+    # 导航闸门/直播旁路键任意时刻可写
+    for name in ("NaviGuidedLaneChangeEnabled", "IsLiveStreaming", "ExperimentalMode"):
+      assert server.PARAMS_WHITELIST[name].offroad_only is False, name
+
+  def test_groups_covered(self):
+    groups = {spec.group for spec in server.PARAMS_WHITELIST.values()}
+    assert groups == set(server.PARAM_GROUPS)  # 每个分组至少有一个键
+
+  def test_schema_endpoint(self):
+    async def body():
+      client = await _client()
+      try:
+        resp = await client.get("/params/schema")
+        data = await resp.json()
+        assert data["ok"] is True
+        assert data["groups"] == list(server.PARAM_GROUPS)
+        spec = data["params"]["AutoLaneChangeTimer"]
+        assert spec == {"kind": "int", "lo": -1, "hi": 5, "offroad_only": True,
+                        "group": "slc", "desc": "-1=Off 0=Nudge 1=Nudgeless 2..5=0.5/1/2/3s"}
       finally:
         await client.close()
 
