@@ -7,6 +7,7 @@
 环境无 pytest-asyncio/anyio 插件，async 测试体经 asyncio.run() 同步包装。
 """
 import asyncio
+import struct
 from subprocess import TimeoutExpired
 
 import pytest
@@ -233,7 +234,8 @@ class TestLivestreamWakeup:
     _run(body())
 
 class TestMdnsRewrite:
-  """v6.3.1：浏览器 offer 的 .local mDNS 候选转发前换成 IPv4。"""
+  """v6.3.1：浏览器 offer 的 .local mDNS 候选转发前换成 IPv4（raw 查询，
+  单播发向 offer 来源 + 组播兜底——iPhone 热点路由不桥接，组播到不了手机）。"""
 
   OFFER = (
     "v=0\r\n"
@@ -245,32 +247,59 @@ class TestMdnsRewrite:
 
   def test_no_local_passthrough(self):
     sdp = "v=0\r\na=candidate:x 1 udp 1 172.20.10.3 54052 typ host\r\n"
-    out, mapping = server._rewrite_mdns_candidates(sdp)
-    assert out == sdp and mapping == {}
+    out, mapping, added = server._rewrite_mdns_candidates(sdp)
+    assert out == sdp and mapping == {} and added == 0
 
   def test_resolved_names_replaced_everywhere(self, monkeypatch):
-    monkeypatch.setattr(server, "_AVAHI_BIN", "/usr/bin/avahi-resolve")
-    answers = {"aaa-bbb.local": "172.20.10.1", "ccc-ddd.local": "172.20.10.9"}
-
-    class R:
-      def __init__(self, name):
-        self.returncode = 0 if name in answers else 1
-        ip = answers.get(name, "")
-        self.stdout = f"{name}\t::ffff:1.2.3.4\n{name}\t{ip}\n" if ip else ""
-
-    monkeypatch.setattr(server.subprocess, "run",
-                        lambda cmd, **k: R(cmd[-1]))
-    out, mapping = server._rewrite_mdns_candidates(self.OFFER)
-    assert mapping == answers
-    assert ".local" not in out
+    answers = {"aaa-bbb.local": "172.20.10.1", "ccc-ddd.local": None}  # 后者解析失败
+    monkeypatch.setattr(server, "_resolve_mdns", lambda n, p, **k: answers.get(n))
+    out, mapping, added = server._rewrite_mdns_candidates(self.OFFER, "172.20.10.9")
+    assert mapping == {"aaa-bbb.local": "172.20.10.1"}
     assert out.count("172.20.10.1") == 2  # 同名多 candidate 全部替换
+    assert "ccc-ddd.local" in out        # 解析不到的保留原样
+    assert added == 1                    # 但派生了 peer 兜底候选
 
-  def test_unresolved_kept_and_survives(self, monkeypatch):
-    monkeypatch.setattr(server, "_AVAHI_BIN", "/usr/bin/avahi-resolve")
-    monkeypatch.setattr(server.subprocess, "run",
-                        lambda cmd, **k: (_ for _ in ()).throw(TimeoutExpired(cmd, 3)))
-    out, mapping = server._rewrite_mdns_candidates(self.OFFER)
-    assert mapping == {} and out == self.OFFER  # 与改动前行为一致
+  def test_peer_fallback_synthesizes_candidates(self, monkeypatch):
+    monkeypatch.setattr(server, "_resolve_mdns", lambda n, p, **k: None)
+    out, mapping, added = server._rewrite_mdns_candidates(self.OFFER, "172.20.10.1")
+    assert mapping == {}
+    assert added == 3  # OFFER 里 3 条 .local 候选逐条派生
+    assert "a=candidate:matepeer 1 udp 2113937151 172.20.10.1 59961 typ host" in out
+    assert "a=candidate:matepeer 1 udp 2113937151 172.20.10.1 62889 typ host" in out
+    # 派生行紧跟原行之后，且不影响非 candidate 行
+    lines = out.split("\r\n")
+    for i, ln in enumerate(lines):
+      if ln.startswith("a=candidate:matepeer"):
+        assert lines[i - 1].startswith("a=candidate:") and ".local" in lines[i - 1]
+
+  def test_resolve_timeout_kept_and_survives(self, monkeypatch):
+    # _resolve_mdns 内部已吞 socket 异常返回 None；无 peer 时也不派生
+    monkeypatch.setattr(server, "_resolve_mdns", lambda n, p, **k: None)
+    out, mapping, added = server._rewrite_mdns_candidates(self.OFFER)
+    assert mapping == {} and added == 0 and out == self.OFFER
+
+  def test_query_build_and_answer_parse_roundtrip(self):
+    name = "dead-beef.local"
+    q = server._mdns_build_query(name)
+    # QU 位必须置起（请求单播应答）
+    assert q[-2:] == struct.pack(">H", 1 | 0x8000)
+    # 合成一个 mDNSResponder 风格应答：question + 指针压缩的 A 记录
+    enc = server._mdns_encode_name(name)
+    question = enc + struct.pack(">HH", 1, 1 | 0x8000)
+    rr = b"\xc0\x0c" + struct.pack(">HHIH", 1, 1, 120, 4) + bytes([172, 20, 10, 1])
+    resp = struct.pack(">6H", 0x4D23, 0x8400, 1, 1, 0, 0) + question + rr
+    assert server._mdns_parse_answer(resp, name) == "172.20.10.1"
+    # 自己查询的组播回环（QR=0）必须被忽略
+    assert server._mdns_parse_answer(q + struct.pack(">HHHH", 0, 0, 0, 0), name) is None
+
+  def test_parse_answer_ignores_other_record(self):
+    name = "aa-bb.local"
+    enc = server._mdns_encode_name(name)
+    other = server._mdns_encode_name("zz-yy.local")
+    question = enc + struct.pack(">HH", 1, 1)
+    rr = other + struct.pack(">HHIH", 1, 1, 120, 4) + bytes([10, 0, 0, 9])  # 别的名字
+    resp = struct.pack(">6H", 0, 0x8400, 1, 1, 0, 0) + question + rr
+    assert server._mdns_parse_answer(resp, name) is None
 
 
   def test_wait_for_webrtcd_bounded_on_non_200(self, monkeypatch):

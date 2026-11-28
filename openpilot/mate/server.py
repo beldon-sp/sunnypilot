@@ -76,8 +76,8 @@ import math
 import json
 import os
 import re
-import shutil
-import subprocess
+import socket
+import struct
 import threading
 import time
 
@@ -704,46 +704,150 @@ def _wakeup_livestream() -> None:
 
 # ── v6.3.1 mDNS 候选改写 ──────────────────────────────────────────────
 # iOS Safari / Android Chrome 的 WebRTC offer 只带 xxxx.local 形式的 mDNS
-# 候选（苹果/谷歌的隐私匿名化，设备侧无法关闭）。本仓 webrtcd 引擎是
+# 候选（苹果/谷歌的隐私匿名化，浏览器侧无法关闭）。本仓 webrtcd 引擎是
 # libdatachannel——不做 mDNS 解析 → ICE 拿不到对端地址 → DTLS 连不上 →
-# 「已应答但黑屏」（2026-11-29 手机 Safari 实锤：offer_candidates 全 .local）。
-# 修法：offer 转发前借设备上的 avahi-resolve 把能解析的名字换成 IPv4 写回
-# SDP；解析不到保留原样（行为与改动前一致，最坏还是黑屏而非更坏）。
-# avahi 是 tici rootfs 自带进程（comma 镜像自带 SSH/mDNS 通告），非 mate 依赖。
+# 「已应答但黑屏」（2026-11-29 手机 Safari 实锤：offer_candidates 全 .local；
+# 且 iPhone 热点是路由非桥接，组播查询无应答，mdns unresolved 事件 ×2）。
+# 修法：offer 转发前自己发 mDNS A 查询——单播直发 offer 来源 IP（QU 位请求
+# 单播应答，Apple mDNSResponder 支持）+ 组播兜底（普通路由器网段），把解析
+# 到的 IPv4 写回 SDP；解析不到保留原样（不劣于改动前）。不依赖 avahi。
 _MDNS_NAME_RE = re.compile(r"candidate:\S+ 1 udp \d+ ([A-Za-z0-9-]+\.local) ")
-_AVAHI_TIMEOUT_S = 3.0
+# a=candidate:<foundation> <comp> <proto> <prio> <addr> <port> typ host…
+_MDNS_CAND_LINE_RE = re.compile(
+  r"a=candidate:(\S+) (\d+) (\w+) (\d+) ([A-Za-z0-9-]+\.local) (\d+) typ host")
+_MDNS_PORT = 5353
+_MDNS_GROUP = "224.0.0.251"
 
 
-def _resolve_mdns(name: str) -> str | None:
+def _mdns_encode_name(name: str) -> bytes:
+  out = b""
+  for label in name.split("."):
+    out += bytes([len(label)]) + label.encode("ascii", "ignore")
+  return out + b"\x00"
+
+
+def _mdns_build_query(name: str) -> bytes:
+  # QU 位（QCLASS 最高比特）= 请求单播应答（RFC 6762 §5.4）
+  header = struct.pack(">HHHHHH", 0x4D23, 0x0000, 1, 0, 0, 0)
+  question = _mdns_encode_name(name) + struct.pack(">HH", 1, 1 | 0x8000)  # A + QU
+  return header + question
+
+
+def _mdns_parse_answer(data: bytes, name: str) -> str | None:
+  """从 mDNS 响应抠目标名的 A 记录（处理 DNS 指针压缩；忽略自己的组播回环）。"""
   try:
-    out = subprocess.run([_AVAHI_BIN, "-n", name], capture_output=True,
-                         text=True, timeout=_AVAHI_TIMEOUT_S)
-  except (OSError, subprocess.TimeoutExpired):
+    _txid, flags, qd, an, _ns, _ar = struct.unpack(">6H", data[:12])
+    if not flags & 0x8000:  # QR=0 → 是自己查询的回环
+      return None
+    i = 12
+
+    def skip_name(pos):
+      while pos < len(data):
+        ln = data[pos]
+        if ln & 0xC0:
+          return pos + 2
+        pos += 1 + ln
+        if ln == 0:
+          return pos
+      return pos
+
+    for _ in range(qd):
+      i = skip_name(i) + 4
+    target = name.lower()
+    for _ in range(an):
+      labels = []
+      compressed_tail = False
+      while i < len(data) and data[i] & 0xC0 == 0:
+        ln = data[i]
+        if ln == 0:
+          i += 1
+          break
+        labels.append(data[i + 1:i + 1 + ln].decode("ascii", "ignore"))
+        i += 1 + ln
+      if i < len(data) and data[i] & 0xC0:  # 指针 → 名字续接 question（即目标名）
+        compressed_tail = True
+        i += 2
+      rname = (".".join(labels) if labels else target) if not compressed_tail else target
+      if i + 10 > len(data):
+        return None
+      rtype, _rclass, _ttl, rdlen = struct.unpack(">HHIH", data[i:i + 10])
+      rdata = i + 10
+      if rname.lower() == target and rtype == 1 and rdlen == 4:
+        return ".".join(str(b) for b in data[rdata:rdata + 4])
+      i = rdata + rdlen
     return None
-  if out.returncode != 0:
+  except Exception:
     return None
-  # 输出 "name\tIPv4"（也可能先出 IPv6 行，v6.3.1 只关心同网段 IPv4）
-  for line in out.stdout.splitlines():
-    parts = line.split("\t")
-    if len(parts) == 2 and re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", parts[1].strip()):
-      return parts[1].strip()
+
+
+def _resolve_mdns(name: str, peer_ip: str | None, timeout_s: float = 2.0) -> str | None:
+  """单播发向 offer 来源 IP + 组播兜底，任一命中即返回 IPv4。"""
+  query = _mdns_build_query(name)
+  sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+  sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+  if hasattr(socket, "SO_REUSEPORT"):
+    try:
+      sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    except OSError:
+      pass
+  try:
+    sock.bind(("", _MDNS_PORT))  # 应答的目的端口是发起方端口——bind 5353 才收得到
+  except OSError:
+    pass  # 被 avahi 独占：仍可 sendto，但收不到单播应答（尽力而为）
+  try:
+    sock.settimeout(0.4)
+    targets = [(_MDNS_GROUP, _MDNS_PORT)]
+    if peer_ip:
+      targets.append((peer_ip, _MDNS_PORT))
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+      for addr in targets:
+        try:
+          sock.sendto(query, addr)
+        except OSError:
+          pass
+      while True:
+        try:
+          data, _src = sock.recvfrom(4096)
+        except (TimeoutError, socket.timeout, OSError):
+          break
+        ip = _mdns_parse_answer(data, name)
+        if ip:
+          return ip
+  except OSError:
+    return None
+  finally:
+    sock.close()
   return None
 
 
-_AVAHI_BIN = shutil.which("avahi-resolve") or ""
-
-
-def _rewrite_mdns_candidates(sdp: str) -> tuple[str, dict[str, str]]:
-  """返回 (改写后 sdp, {name: ip} 解析映射)。无 .local 候选时原样返回。"""
+def _rewrite_mdns_candidates(sdp: str, peer_ip: str | None = None) -> tuple[str, dict[str, str], int]:
+  """返回 (改写后 sdp, {name: ip} 解析映射, peer 兜底候选数)。无 .local 候选
+  时原样返回。兜底原理：offer 的 TCP 连接来自发起浏览器，peer_ip 即其在本
+  网段的真实 IP——每个 .local host 候选后面派生一条同端口、明文 IP 的候选
+  （foundation 另起避免混淆），不依赖目标设备回 mDNS 应答（iPhone 热点连
+  组播查询都不回）。"""
   resolved: dict[str, str] = {}
   for name in dict.fromkeys(_MDNS_NAME_RE.findall(sdp)):  # 保序去重，通常 ≤2 个
-    ip = _resolve_mdns(name) if _AVAHI_BIN else None
+    ip = _resolve_mdns(name, peer_ip)
     if ip:
       resolved[name] = ip
   sdp_out = sdp
   for name, ip in resolved.items():
     sdp_out = sdp_out.replace(name, ip)
-  return sdp_out, resolved
+  peer_added = 0
+  if peer_ip and ".local" in sdp_out:
+    lines: list[str] = []
+    for line in sdp_out.split("\r\n"):
+      lines.append(line)
+      m = _MDNS_CAND_LINE_RE.match(line)
+      if m:
+        _foundation, comp, proto, prio, _addr, port = m.groups()
+        if proto == "udp":
+          lines.append(f"a=candidate:matepeer {comp} udp {prio} {peer_ip} {port} typ host")
+          peer_added += 1
+    sdp_out = "\r\n".join(lines)
+  return sdp_out, resolved, peer_added
 
 
 def _post_webrtc_offer(sdp: str, camera: str) -> dict:
@@ -806,15 +910,21 @@ async def webrtc_offer_handler(request: web.Request) -> web.Response:
   camera = _normalize_camera(body.get("camera"))
   # mDNS(.local) 候选改写：iOS/Android 浏览器 offer 只有 .local，libdatachannel
   # 不解析 → 必黑屏。转发前用 avahi 换成 IPv4（见 _rewrite_mdns_candidates）。
-  sdp, mdns_resolved = await asyncio.to_thread(_rewrite_mdns_candidates, sdp)
-  if ".local" in sdp:
-    cloudlog.event("mate webrtc mdns unresolved", names=sdp.count(".local"), camera=camera)
+  peer = request.transport.get_extra_info("peername") if request.transport else None
+  peer_ip = peer[0] if peer else None
+  sdp, mdns_resolved, peer_added = await asyncio.to_thread(_rewrite_mdns_candidates, sdp, peer_ip)
+  if ".local" in sdp and peer_added == 0:
+    cloudlog.event("mate webrtc mdns unresolved",
+                   left=sdp.count(".local"), resolved=len(mdns_resolved),
+                   peer=peer_ip, camera=camera)
   try:
     result = await asyncio.to_thread(_post_webrtc_offer, sdp, camera)
   except Exception as e:
     return json_response({"ok": False, "error": str(e), "camera": camera,
-                          "mdns_resolved": mdns_resolved}, status=502)
-  return json_response({"ok": True, "camera": camera, "mdns_resolved": mdns_resolved, **result})
+                          "mdns_resolved": mdns_resolved,
+                          "mdns_peer_candidates": peer_added}, status=502)
+  return json_response({"ok": True, "camera": camera, "mdns_resolved": mdns_resolved,
+                        "mdns_peer_candidates": peer_added, **result})
 
 
 # ── v6.1 V2 mate UI（同端口托管，same-origin 消灭 CORS 面）────────────
