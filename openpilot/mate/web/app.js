@@ -155,6 +155,7 @@ async function pollHealth() {
   try {
     const h = await api('/health');
     lastOnroad = h.onroad;
+    renderKv(document.getElementById('health-kv'), Object.entries(h));
     const onroad = document.getElementById('badge-onroad');
     onroad.textContent = h.onroad === true ? 'ONROAD' : (h.onroad === false ? 'offroad' : '状态未知');
     onroad.className = 'badge ' + (h.onroad === true ? 'bad' : (h.onroad === false ? 'ok' : 'warn'));
