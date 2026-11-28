@@ -23,7 +23,7 @@ WS snapshot 请求做客户端初始化，避免客户端为了拿“当前值�
   services  每轮 SubMaster 健康度——topic seen=false = 数据源进程没跑（offroad 常态）
   panda     随 pandaStates 更新——pandad always_run，offroad 下唯一的活数据源
 
-协议 v5 起 /state 与 WS snapshot 扩展 18 个纯快照段（只进快照，不广播、不补发，
+协议 v5 起 /state 与 WS snapshot 扩展 20 个纯快照段（只进快照，不广播、不补发，
 机制与 meta/services/panda 相同，段未收到过数据不出现）：
 
   device←deviceState            peripheral←peripheralState     manager←managerState
@@ -33,8 +33,11 @@ WS snapshot 请求做客户端初始化，避免客户端为了拿“当前值�
   loc←liveLocationKalman        gps←gpsLocationExternal        map←liveMapDataSP
   model←modelV2+modelDataV2SP   dmodel←drivingModelData        odom←cameraOdometry
   calib←extrinsicsCalibration   params←lateralTorqueParameters+lateralDelay+vehicleParameters
+  naviGps←carrotNavi(vehicle，v6.4)
 
-均遵守服务定位原则：数据源全部是 op 内部推导/聚合结果，局域网客户端无法自产。
+均遵守服务定位原则：数据源全部是 op 内部推导/聚合结果，局域网客户端无法自产；
+naviGps 是有意例外——复述 carrotmate 上行的 carrotNavi.vehicle 手机定位，供与
+gps 段（板载 GNSS）对照排障，只读展示，不回灌任何控车链路。
 
 参考实现是 cp_byd local_collector/collector.py；其 10Hz 周期帧不移植（frame 为
 2Hz 状态语义），admin API 也不在 mate 范围内。
@@ -64,8 +67,8 @@ SERVICES = [
   # v5 快照段：车辆/控制
   "carParams", "carParamsSP", "controlsState", "carStateSP", "carControl", "carControlSP",
   "longitudinalPlan", "longitudinalPlanSP", "lateralManeuverPlan",
-  # v5 快照段：定位/地图
-  "liveLocationKalman", "gpsLocationExternal", "liveMapDataSP",
+  # v5 快照段：定位/地图（carrotNavi v6.4：naviGps 段数据源）
+  "liveLocationKalman", "gpsLocationExternal", "liveMapDataSP", "carrotNavi",
   # v5 快照段：模型/感知
   "modelV2", "modelDataV2SP", "drivingModelData", "cameraOdometry",
   # v5 快照段：标定/参数
@@ -758,6 +761,25 @@ def gps_snapshot(g) -> dict:
   }
 
 
+def navi_gps_snapshot(cn) -> dict:
+  """carrotNavi.vehicle → naviGps 段（v6.4）：carrotmate 上行的手机 GNSS 定位。
+  与 gps 段（板载 ublox）互补排障——克隆盒板载 GNSS 无 fix 时手机链路是否活着看这里。
+  仅 vehicle.meta.present=true 才写入（见主循环门），段 ts 即最后一次有效定位的
+  本机收包时刻；sequence 为手机侧递增序号，心跳续命不算新 fix（与 gps_sources
+  收口语义一致）。单位：lat/lon 度，headingDeg 度，speedKph km/h。"""
+  v = cn.vehicle
+  return {
+    "sequence": int(v.meta.sequence),
+    "sourceTimestampMillis": int(v.meta.sourceTimestampMillis),
+    "latitude": round(float(v.latitude), 7),
+    "longitude": round(float(v.longitude), 7),
+    "headingDeg": round(float(v.headingDeg), 1),
+    "speedKph": round(float(v.speedKph), 1),
+    "roadName": str(v.roadName or ""),
+    "virtualGps": v.virtualGps,
+  }
+
+
 def map_snapshot(lmd) -> dict:
   """liveMapDataSP → map 段（1Hz，sunnypilot 专属）：在线地图限速/前方限速/路名。
   数据源是 op 侧 mapd 拉取的地图数据，非客户端上行，符合服务定位原则。"""
@@ -1176,6 +1198,8 @@ class MatePoller:
         self.set_state("loc", loc_snapshot(sm["liveLocationKalman"]))
       if sm.updated["gpsLocationExternal"]:
         self.set_state("gps", gps_snapshot(sm["gpsLocationExternal"]))
+      if sm.updated["carrotNavi"] and sm["carrotNavi"].vehicle.meta.present:
+        self.set_state("naviGps", navi_gps_snapshot(sm["carrotNavi"]))
       if sm.updated["liveMapDataSP"]:
         self.set_state("map", map_snapshot(sm["liveMapDataSP"]))
       if sm.updated["modelV2"] or sm.updated["modelDataV2SP"]:

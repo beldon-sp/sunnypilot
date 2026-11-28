@@ -29,6 +29,7 @@ from openpilot.mate.poller import (
   loc_snapshot,
   manager_snapshot,
   map_snapshot,
+  navi_gps_snapshot,
   model_snapshot,
   odom_snapshot,
   opstate_payload,
@@ -711,6 +712,19 @@ class TestLocGpsMapSnapshots:
     assert d["source"] == "ublox" and d["hasFix"] is True and d["satelliteCount"] == 12
     assert d["vNED"] == [10.2, 0.0, 0.0]
     json.dumps(gps_snapshot(log.GpsLocationData.new_message()))
+
+  def test_navi_gps_snapshot(self):
+    cn = custom.CarrotNaviState.new_message(vehicle={
+      "meta": {"present": True, "sequence": 417, "sourceTimestampMillis": 1795885157026},
+      "latitude": 22.54310347, "longitude": 113.9018959, "headingDeg": 359.64,
+      "speedKph": 61.2, "roadName": "滨海大道", "virtualGps": False,
+    })
+    d = navi_gps_snapshot(cn)
+    assert d["sequence"] == 417 and d["sourceTimestampMillis"] == 1795885157026
+    assert d["latitude"] == 22.5431035 and d["longitude"] == 113.9018959  # lat 源 8 位小数被 round 7 收拢
+    assert d["headingDeg"] == 359.6 and d["speedKph"] == 61.2
+    assert d["roadName"] == "滨海大道" and d["virtualGps"] is False
+    json.dumps(navi_gps_snapshot(custom.CarrotNaviState.new_message()))  # 全默认可读
 
   def test_map_snapshot(self):
     lmd = custom.LiveMapDataSP.new_message(

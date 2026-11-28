@@ -13,8 +13,9 @@ mate — 车机事件实时推送服务（局域网）
   GET /ws                 WebSocket（heartbeat 20s）
   GET /stream             SSE（?kinds=events,sound 可过滤）
   GET /state                 一次性状态快照（car/radar/opstate/events/sound +
-                             services/panda/meta，v5 起再扩 19 个纯快照段
+                             services/panda/meta，v5 起再扩 20 个纯快照段
                              device/…/params，v6.3 增 road（随 frame 推送），
+                             v6.4 增 naviGps（carrotNavi 手机定位复述），
                              见 poller.py v5 小节；不周期推流）
   GET /health             健康检查（不鉴权，含 poller 心跳新鲜度与 onroad 标志）
   GET /sounds/<file.wav>  播放 sound 事件对应的音效文件（随语言目录切换）
@@ -42,11 +43,13 @@ v6.1（当前，PROTOCOL_VERSION 保持 6 的 additive 修订，kind 集不变�
 协议 v6（当前，PROTOCOL_VERSION = 6，FLAVOR = "sunnypilot"）：kind 集
 events/opstate/button/sound/frame/confirm 不变（v6 新增 confirm，见下）；
 hello 带 fork 标识 flavor（客户端门控主键，非本 fork 的客户端按协议不匹配处理）；
-frame 含 carrot 段（carrotMan 遥测，v4 引入）；/state 与 WS snapshot 扩展 19 个
+frame 含 carrot 段（carrotMan 遥测，v4 引入）；/state 与 WS snapshot 扩展 20 个
 纯快照段（device/peripheral/manager/proc/backup/temp/carParams/controls/carSP/
 control/plan/loc/gps/map/model/dmodel/odom/calib/params，见 poller.py v5 小节与
 API.md §5.3）。v6.3（additive）：frame 新增 road 段（modelV2 道路几何栅格采样，
-快照与 frame 同源同函数，见 poller.py road 小节与 API.md §5.4）。旧客户端按既有
+快照与 frame 同源同函数，见 poller.py road 小节与 API.md §5.4）。v6.4（additive）：
+快照新增 naviGps 段（carrotNavi.vehicle 手机定位复述，仅供与 gps 段对照排障，
+不广播不补发，present=false 时不更新——段 ts 变旧即手机无新定位）。旧客户端按既有
 约定忽略未知段/未知字段即可，无破坏性变更。历史：v5 = params 读写 API（双向控制）；
 v4 = frame 增加 carrot 段；v3 = kind 收窄 + 2Hz frame（v3 客户端收到版本不符的
 error 后自行停止重连）。

@@ -4,7 +4,7 @@
 方向盘按键、播报声音四类**边沿事件**与 2Hz 的 **frame 周期状态帧**（car/radar 段）
 通过 **WebSocket** 或 **SSE** 推给局域网客户端，并提供一次性状态快照 `GET /state`。
 
-> **协议版本：v6**（`hello.version = 6`）。v2 → v3 迁移要点见 §9；v3 → v4 变更：`frame` 新增 `carrot` 段（carrotMan 遥测）；v4 → v5 变更：`GET /state` 与 WS `snapshot` 扩展 18 个纯快照段（§5.3），kind 白名单、推送语义与鉴权均不变；v5 追加：`hello` 新增 `flavor` 字段（fork 标识，本仓为 `sunnypilot`）、params 读写 API（§10.1）；v5 → v6 变更：kind 新增 `confirm`（命令确认闭环）、`POST /command` / `POST /command/confirm` / `POST /route_geometry`（§10.2-§10.4）、params 写白名单扩容并引入 offroad_only 门控（§10.1），均向后兼容（老客户端忽略未知 kind / 端点即可）；v6.1/v6.2 增补见 §11/§12。**v6.3（additive）**：`frame` 新增 `road` 段并同步进快照——modelV2 道路几何与模型多目标的服务端栅格采样（§4.5/§5.4），kind 集、鉴权、params 均不变，老客户端忽略未知段即零影响。
+> **协议版本：v6**（`hello.version = 6`）。v2 → v3 迁移要点见 §9；v3 → v4 变更：`frame` 新增 `carrot` 段（carrotMan 遥测）；v4 → v5 变更：`GET /state` 与 WS `snapshot` 扩展 18 个纯快照段（§5.3），kind 白名单、推送语义与鉴权均不变；v5 追加：`hello` 新增 `flavor` 字段（fork 标识，本仓为 `sunnypilot`）、params 读写 API（§10.1）；v5 → v6 变更：kind 新增 `confirm`（命令确认闭环）、`POST /command` / `POST /command/confirm` / `POST /route_geometry`（§10.2-§10.4）、params 写白名单扩容并引入 offroad_only 门控（§10.1），均向后兼容（老客户端忽略未知 kind / 端点即可）；v6.1/v6.2 增补见 §11/§12。**v6.3（additive）**：`frame` 新增 `road` 段并同步进快照——modelV2 道路几何与模型多目标的服务端栅格采样（§4.5/§5.4），kind 集、鉴权、params 均不变，老客户端忽略未知段即零影响。**v6.4（additive）**：快照新增 `naviGps` 段（§5.3）——carrotmate 上行的手机定位（carrotNavi.vehicle）复述，与 `gps` 段（板载 GNSS）对照排障；只进快照不广播，老客户端忽略未知段即零影响。
 
 ## 0. 服务定位原则与架构
 
@@ -448,7 +448,7 @@ v6.3 新增，modelV2 道路几何与模型多目标的**服务端栅格采样**
 
 > 以上为节选。v5 全部新增段（device/peripheral/manager/proc/backup/temp/carParams/
 > controls/carSP/control/plan/loc/gps/map/model/dmodel/odom/calib/params）见 §5.3；
-> v6.3 新增段（road）见 §5.4。
+> v6.3 新增段（road）见 §5.4；v6.4 新增段（naviGps）见 §5.3。
 
 - 每段自带 `ts`（Unix 墙钟秒，车机时钟错时自行对齐），客户端据此判断新鲜度
 - **未收到过的数据段不出现**（offroad 刚启动时 `car`/`opstate` 可能缺失；
@@ -550,6 +550,7 @@ v5 在 `/state` 与 WS `snapshot` 中新增以下状态段。与 `meta`/`service
 | `plan` | longitudinalPlan + longitudinalPlanSP + lateralManeuverPlan | 20Hz | 纵向规划序列 + SP 智能巡航/限速辅助 |
 | `loc` | liveLocationKalman | 20Hz | EKF 融合定位（经纬/速度/姿态，车机 GNSS+IMU） |
 | `gps` | gpsLocationExternal | 10Hz | 原始 GNSS（低精度兜底，与 `loc` 互补） |
+| `naviGps` | carrotNavi(vehicle) | ~1Hz（定位变更才有新 sequence） | carrotmate 手机定位复述（与 `gps` 对照排障，仅 `present` 时更新，v6.4） |
 | `map` | liveMapDataSP | 1Hz | 在线地图限速/前方限速/路名（mapd 拉取，非客户端上行） |
 | `model` | modelV2 + modelDataV2SP | 20Hz | 模型元信息/决策摘要/前车首采样，SP 子对象 |
 | `dmodel` | drivingModelData | 20Hz | UI 驾驶模型：路径多项式系数/车道线置信度 |
@@ -591,13 +592,15 @@ v5 在 `/state` 与 WS `snapshot` 中新增以下状态段。与 `meta`/`service
   > 本仓 ControlsState 的这些字段在 capnp `deprecated :group` 下（carrot 树遗留布局），mate 已做映射，客户端无感。
 - `control`：`enabled`/`latActive`/`longActive`、`leftBlinker`/`rightBlinker`、`currentCurvature`、`actuators = {torque, steeringAngleDeg, curvature, accel, jerk, gas, brake, torqueOutputCan, speed, longControlState}`（op 实际下发值）、`hud = {setSpeed, visualAlert, leadDistanceBars, speedVisible, lanesVisible, leadVisible, leftLaneVisible, rightLaneVisible, leftLaneDepart, rightLaneDepart}`、`cruise = {cancel, resume, override}`、`mads = {enabled, active, available, state}`（carControlSP）
 
-#### `plan` / `loc` / `gps` / `map` 段
+#### `plan` / `loc` / `gps` / `naviGps` / `map` 段
 
 - `plan`：`hasLead`/`fcw`、`source`、`aTarget`、`shouldStop`/`allowThrottle`/`allowBrake`、`accelBoost`、`accels[]`/`speeds[]`/`jerks[]`（未来 2.5s 规划序列，20Hz×50 点）、`processingDelay`/`solverExecutionTime`、`desiredCurvature`（lateralManeuverPlan）+ `sp = {source, vTarget, aTarget, sccVision = {state, enabled, active, vTarget, aTarget, currentLateralAccel, maxPredictedLateralAccel}, sccMap = {…}, speedLimit = {valid, speed, dist, source, offset, final, assistState, assistEnabled, assistActive, assistVTarget, assistATarget}, e2eAlerts = {greenLight, leadDepart}}`
   > `speedLimit.speed` 单位 m/s；`sccVision.state` 取值 `disabled/enabled/entering/turning/leaving/overriding`，`assistState` 取值 `disabled/inactive/preActive/pending/adapting/active`
 - `loc`：`status`（`uninitialized`/`uncalibrated`/`valid`）、`unixTimestampMillis`、`gpsWeek`/`gpsTimeOfWeek`、`inputsOK`/`posenetOK`/`gpsOK`/`sensorsOK`/`deviceStable`/`excessiveResets`、`timeSinceReset`/`timeToFirstFix`、`posGeodetic = {value: [lat, lon, alt], std, valid}`（lat/lon 度、alt 米）、`velNED`、`accelDevice`、`orientationNED`（同为 Measurement 三元组）
   > 航向可由 `velNED.value` 推导：`bearing = atan2(vE, vN)`
 - `gps`：`latitude`/`longitude`/`altitude`、`speed`（m/s）、`bearingDeg`、`horizontalAccuracy`/`verticalAccuracy`/`bearingAccuracyDeg`/`speedAccuracy`、`unixTimestampMillis`、`source`、`vNED`、`hasFix`、`satelliteCount`
+- `naviGps`（v6.4）：`sequence`（手机侧递增序号，会话内累加、重开会重置）、`sourceTimestampMillis`（手机定位产生时刻）、`latitude`/`longitude`（度）、`headingDeg`（度）、`speedKph`（km/h）、`roadName`、`virtualGps`（手机模拟定位标记）
+  > 数据源是 carrotNavi 的 vehicle 子段（carrotmate 客户端上行），仅 `vehicle.meta.present=true` 时写入快照——段 `ts` 变旧即"手机当前没在供定位"，与 `gps` 段（板载 ublox，克隆盒常无 fix）对照可分辨两条 GNSS 链路谁活着。本段纯展示，不回灌 gpsLocationExternal/locationd。
 - `map`：`speedLimitValid`/`speedLimit`、`speedLimitAheadValid`/`speedLimitAhead`/`speedLimitAheadDistance`、`roadName`（mapd 从在线地图拉取，属 op 独有数据，不违反 §0 回推原则）
 
 #### `model` / `dmodel` / `odom` / `calib` / `params` 段
