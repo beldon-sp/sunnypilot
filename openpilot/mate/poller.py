@@ -5,9 +5,10 @@ mate 事件源：订阅 cereal 总线，推导边沿事件与周期状态帧并�
   opstate selfdriveState 状态机跳转 {"state", "enabled", "active", "engageable"}
   button  方向盘按键边沿           {"button", "pressed"}
   sound   播报声音变化             {"sound", "file", "loop", "alertText1", "alertText2"}
-  frame   2Hz 周期状态帧           {"car"?, "radar"?, "carrot"?}：驾驶屏连续值，段与快照同源；
-          窗口内 carState/radarState/carrotMan 均无更新（offroad）则不推；
-          carrot 段为协议 v4 新增（carrotMan 遥测）
+  frame   2Hz 周期状态帧           {"car"?, "radar"?, "carrot"?, "road"?}：驾驶屏连续值，段与快照同源；
+          窗口内 carState/radarState/carrotMan/modelV2 均无更新（offroad）则不推；
+          carrot 段为协议 v4 新增（carrotMan 遥测）；
+          road 段为协议 v6.3 新增（modelV2 道路几何栅格采样，供 carrotmate SR）
 
 v3 起不再有 navi kind：其输入 carrotNavi 即 carrotmate（客户端）经 7706/7714 上行
 推送的导航数据，回推属回声——服务定位原则：mate 只推 op 独有数据，客户端自产的
@@ -40,7 +41,7 @@ WS snapshot 请求做客户端初始化，避免客户端为了拿“当前值�
 """
 import time
 from functools import cache
-from typing import Optional
+from math import atan2
 
 import openpilot.cereal.messaging as messaging
 from openpilot.cereal import car, custom, log
@@ -238,6 +239,151 @@ def radar_snapshot(rs) -> dict:
 
 
 # ---------------- frame：周期状态帧 ----------------
+
+# ---------------- frame road 段（协议 v6.3 新增，carrotmate SR 数据面） ----------------
+#
+# modelV2 道路几何与时序目标在固定距离栅格上采样后下发（frame 推 + snapshot 拉，
+# 同源同函数）。契约与推导依据见 road-segment-plan-2026-11-28.md rev2：
+# - laneLines/roadEdges 的 x 是模型自带的恒定空间栅格（0→192m，fill_model_msg.py），
+#   采样区间插值读消息 x，无需 import modeld；栅格最大 160 恒不越界（无尾部钳位/null 分支）；
+# - 源 device frame y 右正（ldw.py:31-32、radard.py:164 yRel=-y[0] 互证），
+#   输出统一取负转左正（与 radar 段 yRel 同约定）；z（heights）原样透传（待真车确认语义）；
+# - 帧门 sm.valid["modelV2"]（事件层 valid，预热/遮挡期模型输出全零「笔直车道」；
+#   ModelDataV2 结构体无 valid 字段）；线门 laneLineProbs<0.5 null 化
+#   + 连续 2 帧滞回恢复；全 null → 整段不发（客户端隐藏淡出，禁止假想补画）。
+
+ROAD_DISTS = (5, 15, 30, 50, 80, 120, 160)  # 米；定死即契约，改栅格=改版本注记
+ROAD_LINE_COUNT = 4
+ROAD_PROB_MIN = 0.5             # 逐线 null 化阈值（前端 LINE_PROB_MIN=0.35 仍可作兜底）
+ROAD_PROB_RECOVER = 2           # 恢复滞回帧数（跌落即时，防透视近端线闪烁）
+ROAD_LEAD_PROB_MIN = 0.3
+ROAD_LEAD_D_MIN = 2.0
+ROAD_LEAD_D_MAX = 150.0
+ROAD_LEAD_MAX = 3
+
+
+class RoadLineGate:
+  """逐线 probs 滞回（纯状态对象）：低于阈值当帧 null，恢复需连续 ROAD_PROB_RECOVER
+  帧过阈。初始放行——首个有效帧不受滞回延迟（对齐规格「完整有效帧」场景）。"""
+
+  def __init__(self, size: int = ROAD_LINE_COUNT):
+    self.size = size
+    self.ok = [True] * size
+    self.streak = [0] * size
+
+  def update(self, probs: list[float]) -> list[bool]:
+    for i in range(self.size):
+      p = probs[i] if i < len(probs) else 0.0
+      if p < ROAD_PROB_MIN:
+        self.ok[i] = False
+        self.streak[i] = 0
+      elif not self.ok[i]:
+        self.streak[i] += 1
+        if self.streak[i] >= ROAD_PROB_RECOVER:
+          self.ok[i] = True
+    return self.ok
+
+
+def _interp_at_dists(xs, ys, dists: tuple = ROAD_DISTS) -> list | None:
+  """(xs, ys) 序列线性插值到 dists 栅格，两位小数。序列 <2 点返回 None；
+  栅格点落在序列范围外输出 None（本仓 x 栅格保证不发生，仅防御）。"""
+  n = min(len(xs), len(ys))
+  if n < 2:
+    return None
+  out = []
+  for d in dists:
+    val = None
+    for i in range(n - 1):
+      x0, x1 = float(xs[i]), float(xs[i + 1])
+      if x0 <= d <= x1:
+        span = x1 - x0
+        t = 0.0 if span < 1e-6 else (d - x0) / span
+        val = float(ys[i]) + t * (float(ys[i + 1]) - float(ys[i]))
+        break
+    out.append(round(val, 2) if val is not None else None)
+  return out
+
+
+def _lane_centers(lines: list) -> list:
+  """自车道中心线逐栅格点：夹住 lateral 0 的最近左右线对（|y|>0.2）取中点，
+  左正域下即 min(左) 与 max(右) 之中。不可构造点 None（禁止 webui 的 0.0 填充
+  ——0 会被当成「自车正处道路中心」的假信息）。"""
+  out = []
+  for k in range(len(ROAD_DISTS)):
+    left = [l[k] for l in lines if l is not None and l[k] is not None and l[k] > 0.2]
+    right = [l[k] for l in lines if l is not None and l[k] is not None and l[k] < -0.2]
+    out.append(round((min(left) + max(right)) / 2.0, 2) if left and right else None)
+  return out
+
+
+def _road_leads(leads) -> list[dict]:
+  """leadsV3 → road.leads：标量 prob 过滤、d 显式升序（恒 3 槽且槽序≠距离序）、
+  ≤3 个；y 取负转左正，v 为绝对速度模不翻转；heading 为 2s 窗（LEAD_T_IDXS 间隔）
+  相对运动方向，左正域 atan2，非车头朝向。禁止附带 webui 的 i 槽位号（其前端未消费）。"""
+  out = []
+  for l in leads:
+    xs, ys = list(l.x), list(l.y)
+    if not xs or not ys:
+      continue
+    prob = float(l.prob)  # 本仓为 Float32 标量（LeadDataV3），非序列
+    if prob < ROAD_LEAD_PROB_MIN:
+      continue
+    d0 = float(xs[0])  # t=0 当前纵向距离
+    if not ROAD_LEAD_D_MIN < d0 < ROAD_LEAD_D_MAX:
+      continue
+    heading = None
+    if len(xs) >= 2 and len(ys) >= 2:
+      dx = float(xs[1]) - float(xs[0])
+      dy = -(float(ys[1]) - float(ys[0]))
+      if abs(dx) > 1e-3 or abs(dy) > 1e-3:
+        heading = round(atan2(dy, dx), 3)
+    out.append({
+      "d": round(d0, 1),
+      "y": round(-float(ys[0]), 2),
+      "prob": round(prob, 2),
+      "v": _first(l.v, 2),
+      "a": _first(l.a, 2),
+      "xStd": _first(l.xStd, 3),
+      "yStd": _first(l.yStd, 3),
+      "heading": heading,
+    })
+  out.sort(key=lambda o: o["d"])
+  return out[:ROAD_LEAD_MAX]
+
+
+def road_sample(m, gate: RoadLineGate, valid: bool = True) -> dict | None:
+  """modelV2 → road 段（快照段与 frame road 段同源同函数）。返回 None=整段缺席：
+  帧无效或几何全 null。valid 是**事件层**旗标（SubMaster.sm.valid["modelV2"]，
+  cereal/messaging/__init__.py:261 自 msg.valid 记录）——ModelDataV2 结构体无
+  valid 字段，勿从 m 上读。栅格自描述（dists 随段），客户端可缓存硬编码。"""
+  if not valid:
+    return None
+  probs = [round(float(p), 2) for p in m.laneLineProbs][:ROAD_LINE_COUNT]
+  ok = gate.update(probs)
+  lines: list = []
+  heights: list = []
+  for i, line in enumerate(m.laneLines):
+    if i >= len(ok) or not ok[i]:
+      lines.append(None)
+      heights.append(None)
+      continue
+    lines.append(_interp_at_dists(line.x, [-float(v) for v in line.y]))
+    heights.append(_interp_at_dists(line.x, [float(v) for v in line.z]))
+  edges = [_interp_at_dists(edge.x, [-float(v) for v in edge.y]) for edge in m.roadEdges]
+  if all(l is None for l in lines) and all(e is None for e in edges):
+    return None
+  return {
+    "dists": list(ROAD_DISTS),
+    "lines": lines,
+    "edges": edges,
+    "heights": heights,
+    "probs": probs,
+    "laneCenters": _lane_centers(lines),
+    "pathStd": _interp_at_dists(m.position.x, [float(v) for v in m.position.yStd]),
+    "leads": _road_leads(m.leadsV3),
+    "frameId": int(m.frameId),
+  }
+
 
 def carrot_snapshot(cm) -> dict:
   """carrotMan → frame carrot 段（协议 v4 新增，JSON-able）。字段名与 cereal
@@ -763,9 +909,10 @@ def params_snapshot(ltp, ld, vp) -> dict:
   }
 
 
-def frame_payload(car: dict | None, radar: dict | None, carrot: dict | None = None) -> dict | None:
+def frame_payload(car: dict | None, radar: dict | None, carrot: dict | None = None,
+                  road: dict | None = None) -> dict | None:
   """frame 帧组装（纯函数）：仅出现有数据的段；各段全空（窗口无更新）返回 None。"""
-  if car is None and radar is None and carrot is None:
+  if car is None and radar is None and carrot is None and road is None:
     return None
   out: dict = {}
   if car is not None:
@@ -774,6 +921,8 @@ def frame_payload(car: dict | None, radar: dict | None, carrot: dict | None = No
     out["radar"] = radar
   if carrot is not None:
     out["carrot"] = carrot
+  if road is not None:
+    out["road"] = road
   return out
 
 
@@ -785,16 +934,17 @@ class FrameTicker:
   def __init__(self, period_s: float, now: float) -> None:
     self.period_s = period_s
     self.next_t = now + period_s
-    self.car: Optional[dict] = None
-    self.radar: Optional[dict] = None
-    self.carrot: Optional[dict] = None
+    self.car: dict | None = None
+    self.radar: dict | None = None
+    self.carrot: dict | None = None
+    self.road: dict | None = None
 
-  def tick(self, now: float) -> Optional[dict]:
+  def tick(self, now: float) -> dict | None:
     if now < self.next_t:
       return None
     self.next_t = max(self.next_t + self.period_s, now + self.period_s)
-    payload = frame_payload(self.car, self.radar, self.carrot)
-    self.car = self.radar = self.carrot = None
+    payload = frame_payload(self.car, self.radar, self.carrot, self.road)
+    self.car = self.radar = self.carrot = self.road = None
     return payload
 
 
@@ -882,7 +1032,6 @@ class SoundTracker:
   def update(self, sm, main_toggle: bool) -> dict | None:
     """每轮 SubMaster 更新后调用；alert 变化时返回 sound payload，否则 None。"""
     ss = sm["selfdriveState"]
-    file_override: str | None = None
     if main_toggle:
       new_alert = int(AudibleAlert.prompt)
     elif sm.updated["selfdriveState"] or sm.updated["carrotMan"]:
@@ -923,6 +1072,7 @@ class MatePoller:
   def __init__(self, emit, set_state=None):
     self.emit = emit  # emit(kind: str, data: dict)，server.Hub 提供，线程安全
     self.set_state = set_state  # set_state(kind, data)，维护 /state 快照，可选
+    self.road_gate = RoadLineGate()  # v6.3 road 段逐线 probs 滞回状态
 
   def run(self):
     sm = messaging.SubMaster(SERVICES)
@@ -979,6 +1129,16 @@ class MatePoller:
       # carrot 遥测：20Hz 输入随轮喂 frame 窗口（协议 v4 carrot 段）
       if sm.updated["carrotMan"]:
         ticker.carrot = carrot_snapshot(sm["carrotMan"])
+
+      # road 几何采样：仅 modelV2 更新触发（不与 model 段的 SP 合并——modelDataV2SP
+      # 更新不应重发 road）；帧门用事件层 sm.valid（结构体无 valid 字段）；
+      # 快照段与 frame 窗口同源同帧写入（协议 v6.3 road 段）
+      if sm.updated["modelV2"]:
+        road = road_sample(sm["modelV2"], self.road_gate, sm.valid["modelV2"])
+        if road is not None:
+          if self.set_state is not None:
+            self.set_state("road", road)
+          ticker.road = road
 
       # v5 快照段：只进 /state 与 WS snapshot（set_state），不进事件流。
       # 高频 topic（100Hz）快照取最新值，与 car/radar 段同模式（O(1) 字典写入）；

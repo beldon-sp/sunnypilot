@@ -40,6 +40,12 @@
           <h3>车辆 / 雷达（frame 2Hz）</h3>
           <dl class="kv" id="frame-kv"><dt>—</dt><dd>等待 frame…</dd></dl>
         </div>
+        <div class="card wide">
+          <h3>道路几何（frame road 段，v6.3）<span class="badge" id="road-age">—</span></h3>
+          <svg id="road-svg" viewBox="0 0 640 360" role="img" aria-label="road 俯视验收图"></svg>
+          <p class="hint">验收图（非 SR 成品）：上=前方，<b>左=自车左</b>（契约左正）——左车道线画到右侧即符号镜像 bug。
+          灰线=车道线（透明度∝probs）、橙线=路缘、绿点线=自车道中心、灰盒=模型 leads。段缺席=offroad/帧门未过。</p>
+        </div>
         <div class="card">
           <h3>实时告警（events）</h3>
           <ul class="events" id="events-active"></ul>
@@ -47,7 +53,7 @@
           <ul class="events log" id="events-log"></ul>
         </div>
         <div class="card wide">
-          <h3>快照段（/state 19 段，点击展开）</h3>
+          <h3>快照段（/state，点击展开）</h3>
           <div id="snapshots"></div>
         </div>
       </div>

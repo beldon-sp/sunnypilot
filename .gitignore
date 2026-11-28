@@ -109,3 +109,4 @@ SKILL.md
 openspec
 logs
 .workbuddy
+.pytest_tmp

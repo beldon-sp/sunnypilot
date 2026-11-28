@@ -5,7 +5,9 @@ from openpilot.cereal import car, custom, log
 from openpilot.mate.poller import (
   EVENT_FLAGS,
   FRAME_PERIOD_S,
+  ROAD_DISTS,
   FrameTicker,
+  RoadLineGate,
   SoundTracker,
   backup_snapshot,
   button_payloads,
@@ -35,6 +37,7 @@ from openpilot.mate.poller import (
   plan_snapshot,
   proc_snapshot,
   radar_snapshot,
+  road_sample,
   services_status,
   sound_payload,
   temp_snapshot,
@@ -300,15 +303,143 @@ class TestRadarSnapshot:
     assert snap["leadsCenterCount"] == 0 and snap["radarErrors"] == []
 
 
+class TestRoadSample:
+  """v6.3 road 段（契约 specs/mate-road-segment）。符号用例锚定地面真值：源为
+  device frame 右正域（radard.py:164 yRel=-y[0]、ldw.py 左线 y<0），禁止源/期望
+  同域对称构造——两处同时翻错时对称断言仍全绿（road-segment-plan rev2 §9 第一风险）。"""
+
+  # 源（右正域）地面真值：左线负、右线正；x 为消息自带的恒定空间栅格（0→192m）
+  _SRC_X = [192.0 * (i / 32.0) ** 2 for i in range(33)]
+
+  def _msg(self, lines_y, probs, edges_y=None, leads=(), pos_x=None, pos_ystd=None,
+           frame_id=123, z_const=0.5):
+    # 注意：valid 是事件层旗标（sm.valid），ModelDataV2 结构体无此字段——帧门走
+    # road_sample(m, gate, valid) 入参，不在消息构造里设
+    xs = self._SRC_X
+    if edges_y is None:
+      edges_y = ([-6.0] * len(xs), [6.0] * len(xs))
+    return log.ModelDataV2.new_message(
+      frameId=frame_id,
+      laneLineProbs=list(probs),
+      laneLines=[{"x": xs, "y": list(ys), "z": [z_const] * len(xs)} for ys in lines_y],
+      roadEdges=[{"x": xs, "y": list(ys), "z": [0.0] * len(xs)} for ys in edges_y],
+      position={"x": list(pos_x or []), "yStd": list(pos_ystd or [])},
+      leadsV3=[dict(ld) for ld in leads],
+    )
+
+  def test_shape_and_constants(self):
+    # 恒定 y 输入 → 栅格值恒等（插值不破坏常数）；4 线 2 缘 7 点形状
+    lines_y = ([-4.2] * 33, [-1.8] * 33, [1.8] * 33, [4.2] * 33)  # 源右正域
+    road = road_sample(self._msg(lines_y, [0.9] * 4), RoadLineGate())
+    assert road is not None
+    assert road["dists"] == list(ROAD_DISTS)
+    assert [len(l) for l in road["lines"]] == [7] * 4
+    assert [len(e) for e in road["edges"]] == [7, 7]
+    assert len(road["probs"]) == 4
+    assert road["frameId"] == 123
+    json.dumps(road)
+
+  def test_sign_anchor_left_positive(self):
+    # 锚点：源右正域左线 y[0]=-1.8（地面真值）→ 输出必须 +1.8（左正契约）
+    lines_y = ([-4.2] * 33, [-1.8] * 33, [1.8] * 33, [4.2] * 33)
+    road = road_sample(self._msg(lines_y, [0.9] * 4), RoadLineGate())
+    assert all(v == 1.8 for v in road["lines"][1])
+    assert all(v == -1.8 for v in road["lines"][2])
+    assert all(v == 6.0 for v in road["edges"][0])   # 左缘（源 -6）→ +6
+    assert all(h == 0.5 for h in road["heights"][0])  # z 原样透传不取负
+
+  def test_invalid_frame_returns_none(self):
+    # 帧门：事件层 valid 未过（sm.valid["modelV2"]）→ 整段不发
+    road = road_sample(self._msg(([-1.8] * 33,), [0.9]), RoadLineGate(), valid=False)
+    assert road is None
+
+  def test_prob_drop_and_recover_hysteresis(self):
+    lines_y = ([-4.2] * 33, [-1.8] * 33, [1.8] * 33, [4.2] * 33)
+    gate = RoadLineGate()
+    # 单线遮挡：跌落即时 null，其余正常
+    road = road_sample(self._msg(lines_y, [0.9, 0.9, 0.2, 0.9]), gate)
+    assert road["lines"][2] is None and road["heights"][2] is None
+    assert road["lines"][1] is not None and road["lines"][3] is not None
+    # 恢复需连续 2 帧：单帧过阈不闪现
+    road = road_sample(self._msg(lines_y, [0.9] * 4), gate)
+    assert road["lines"][2] is None
+    road = road_sample(self._msg(lines_y, [0.9] * 4), gate)
+    assert road["lines"][2] is not None
+
+  def test_all_null_no_segment(self):
+    # 4 线 probs 全低 + 2 缘 x 空 → 整段不发（对齐 webui「all None」语义）
+    lines_y = ([-1.8] * 33,) * 4
+    road = road_sample(self._msg(lines_y, [0.1] * 4, edges_y=([], [])), RoadLineGate())
+    assert road is None
+
+  def test_leads_sort_filter_heading(self):
+    def lead(d, y0=0.0, y1=None, prob=0.8):
+      return {"prob": prob, "x": [d, d + 2.0], "y": [y0, y1 if y1 is not None else y0],
+              "v": [10.0, 10.0], "a": [0.0, 0.0], "xStd": [1.0, 1.0], "yStd": [0.4, 0.4]}
+    # 槽序 80/20/45（≠距离序）→ 显式升序；prob=0.25 过滤；x[0]=1.5 出界过滤
+    leads = [lead(80), lead(20), lead(45), lead(60, prob=0.25), lead(1.5)]
+    road = road_sample(self._msg(([-1.8] * 33,), [0.9] * 4, leads=leads), RoadLineGate())
+    assert [l["d"] for l in road["leads"]] == [20.0, 45.0, 80.0]
+    assert all("i" not in l for l in road["leads"])  # webui 槽位号不照搬
+
+  def test_lead_crossing_heading_positive(self):
+    # 横穿锚点：源右正域 y 从 0 → -2（向左横穿）→ 输出 heading > 0（左正域）
+    ld = {"prob": 0.8, "x": [30.0, 32.0], "y": [0.0, -2.0], "v": [5.0, 5.0],
+          "a": [0.0, 0.0], "xStd": [1.0, 1.0], "yStd": [0.4, 0.4]}
+    road = road_sample(self._msg(([-1.8] * 33,), [0.9] * 4, leads=[ld]), RoadLineGate())
+    assert road["leads"][0]["heading"] > 0
+    assert road["leads"][0]["y"] == 0.0
+    assert abs(road["leads"][0]["heading"] - 0.785) < 1e-3  # atan2(2, 2)
+
+  def test_lead_heading_degenerate_null(self):
+    # 两样本差值≈0 → heading null；单样本 → null
+    still = {"prob": 0.8, "x": [30.0, 30.0], "y": [1.0, 1.0], "v": [0.0, 0.0],
+             "a": [0.0, 0.0], "xStd": [1.0, 1.0], "yStd": [0.4, 0.4]}
+    single = {"prob": 0.8, "x": [30.0], "y": [1.0], "v": [0.0],
+              "a": [0.0], "xStd": [1.0], "yStd": [0.4]}
+    road = road_sample(self._msg(([-1.8] * 33,), [0.9] * 4, leads=[still, single]), RoadLineGate())
+    assert [l["heading"] for l in road["leads"]] == [None, None]
+
+  def test_lane_centers_survive_missing_inner(self):
+    # 左内线（index 1）遮挡 null，外侧线仍在 → 中心线由剩余夹 0 对构造：
+    # 左 +4.2（min）与右 -1.5（max）→ 1.35；webui 的 0.0 填充不照搬
+    lines_y = ([-4.2] * 33, [-1.8] * 33, [1.5] * 33, [4.2] * 33)
+    road = road_sample(self._msg(lines_y, [0.9, 0.1, 0.9, 0.9]), RoadLineGate())
+    assert road["lines"][1] is None
+    assert all(c == 1.35 for c in road["laneCenters"])
+
+  def test_lane_centers_no_bracket_null(self):
+    # 无夹 0 线对（全部在右）→ 每点 None 而非 0
+    lines_y = ([-4.2] * 33, [-1.8] * 33, [-0.5] * 33, [0.1] * 33)  # 输出全正=全左侧
+    road = road_sample(self._msg(lines_y, [0.9] * 4), RoadLineGate())
+    assert all(c is None for c in road["laneCenters"])
+
+  def test_path_std(self):
+    # position.yStd 按 position.x 采样到 dists；恒定 0.6 → 全 0.6；无 position → null
+    road = road_sample(self._msg(([-1.8] * 33,), [0.9] * 4,
+                                 pos_x=self._SRC_X, pos_ystd=[0.6] * 33), RoadLineGate())
+    assert road["pathStd"] == [0.6] * 7
+    road = road_sample(self._msg(([-1.8] * 33,), [0.9] * 4), RoadLineGate())
+    assert road["pathStd"] is None
+
+  def test_frame_snapshot_same_object(self):
+    # 同源同函数：road_sample 单次产物同时进 frame 窗口与快照（poller 主循环）
+    road = road_sample(self._msg(([-1.8] * 33,), [0.9] * 4), RoadLineGate())
+    payload = frame_payload(None, None, None, road)
+    assert payload["road"] is road
+
+
 class TestFramePayload:
   def test_segments(self):
     car = {"vEgo": 10.0}
     radar = {"leadOne": {"status": True}}
     carrot = {"desiredSpeed": 60}
+    road = {"dists": list(ROAD_DISTS)}
     assert frame_payload(car, radar, carrot) == {"car": car, "radar": radar, "carrot": carrot}
     assert frame_payload(car, None) == {"car": car}          # 单段出现
     assert frame_payload(None, radar) == {"radar": radar}
     assert frame_payload(None, None, carrot) == {"carrot": carrot}  # v4: carrot 段独立出现
+    assert frame_payload(None, None, None, road) == {"road": road}  # v6.3: road 段独立出现
     assert frame_payload(None, None) is None                 # 窗口全空不出帧
 
 
@@ -319,8 +450,10 @@ class TestFrameTicker:
     t.car = {"vEgo": 10.0}
     t.radar = {"leadOne": {"status": True}}
     t.carrot = {"desiredSpeed": 60}
+    t.road = {"frameId": 123}
     p = t.tick(100.5)                          # 到点出帧
-    assert p == {"car": {"vEgo": 10.0}, "radar": {"leadOne": {"status": True}}, "carrot": {"desiredSpeed": 60}}
+    assert p == {"car": {"vEgo": 10.0}, "radar": {"leadOne": {"status": True}},
+                 "carrot": {"desiredSpeed": 60}, "road": {"frameId": 123}}
     assert t.tick(100.6) is None               # 出帧后窗口清空，下个节拍重新积累
 
   def test_no_update_skips_frame(self):

@@ -70,6 +70,10 @@ function fmtVal(v) {
   if (v === null || v === undefined) return '—';
   if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2);
   if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (Array.isArray(v)) {  // 数组截断：[5, 15, 30 …×7]，防栅格/序列撑爆表格
+    const head = v.slice(0, 3).map(fmtVal).join(', ');
+    return v.length > 3 ? `[${head} …×${v.length}]` : `[${head}]`;
+  }
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
 }
@@ -173,20 +177,126 @@ on('opstate', (d) => {
   renderKv(document.getElementById('opstate-kv'), Object.entries(d || {}));
 });
 
-const FLAT_FRAME_KEYS = 24; // frame 表上限，避免爆屏
+/* frame 表按段渲染（v6.3 修复）：原全局 24 键上限被 car 段 34 键吃满，
+ * radar/carrot 永不可见；改每段限键 + 数组截断。road 不入表（下方专属验收卡）。 */
+const FRAME_KEYS_PER_SECTION = 12;
+const FRAME_TABLE_SKIP = new Set(['road']);
+
 on('frame', (d) => {
-  const pairs = [];
   const sections = d && typeof d === 'object' ? d : {};
+  if (sections.road) {
+    roadFeed.last = sections.road;
+    roadFeed.at = Date.now();
+    renderRoadSvg(sections.road);
+  }
+  const pairs = [];
   for (const [sec, sub] of Object.entries(sections)) {
-    if (!sub || typeof sub !== 'object') continue;
+    if (FRAME_TABLE_SKIP.has(sec) || !sub || typeof sub !== 'object') continue;
+    let n = 0;
     for (const [k, v] of Object.entries(sub)) {
-      if (pairs.length >= FLAT_FRAME_KEYS) break;
+      if (n >= FRAME_KEYS_PER_SECTION) break;
       pairs.push([`${sec}.${k}`, v]);
+      n++;
     }
-    if (pairs.length >= FLAT_FRAME_KEYS) break;
   }
   if (pairs.length) renderKv(document.getElementById('frame-kv'), pairs);
 });
+
+/* ── road 验收卡（v6.3）────────────────────────────────────────────
+ * 使命是语义验收而非美观：镜像（左线应画左侧）、probs null 化、leads 排序
+ * 三类错误肉眼可辨——rev2 §9 第一风险的浏览器侧防线，独立于 carrotmate 端。
+ * 坐标映射：距离线性（d=0 底、dists 末端顶），横向线性（±8m 截断），
+ * 契约左正 → 画面左（xOf 取负），杜绝和 SR 客户端犯同款符号错。 */
+const ROAD_VIEW = { W: 640, TOP: 18, BOT: 348, LAT_MAX: 8 };
+const roadFeed = { last: null, at: 0 };
+
+function roadXY(ym, d, dMax) {
+  const { W, TOP, BOT, LAT_MAX } = ROAD_VIEW;
+  const lat = Math.max(-LAT_MAX, Math.min(LAT_MAX, ym)) * (W / 2 - 10) / LAT_MAX;
+  return [W / 2 - lat, BOT - (d / dMax) * (BOT - TOP)];
+}
+
+function roadPath(arr, dists, dMax) {
+  // 逐点可 null（断线跳绘）；整线 null 由调用方跳过
+  let path = '', pen = false;
+  arr.forEach((v, i) => {
+    if (v === null || v === undefined) { pen = false; return; }
+    const [x, y] = roadXY(v, dists[i], dMax);
+    path += (pen ? 'L' : 'M') + x.toFixed(1) + ',' + y.toFixed(1);
+    pen = true;
+  });
+  return path;
+}
+
+function roadSvgLine(arr, dists, dMax, stroke, opacity, dash, width) {
+  const path = roadPath(arr, dists, dMax);
+  if (!path) return '';
+  return `<path d="${path}" fill="none" stroke="${stroke}" stroke-opacity="${opacity}"` +
+    `${dash ? ' stroke-dasharray="6 5"' : ''} stroke-width="${width}" stroke-linecap="round"/>`;
+}
+
+function renderRoadSvg(r) {
+  const svg = document.getElementById('road-svg');
+  if (!svg) return;
+  const dists = r && Array.isArray(r.dists) ? r.dists : [];
+  if (!r || !dists.length) {
+    svg.innerHTML = '<text x="320" y="186" text-anchor="middle" fill="#8a8f98" font-size="15">' +
+      '无 road 段（offroad / 帧门未过 / 几何全 null）</text>';
+    return;
+  }
+  const { W, TOP, BOT, LAT_MAX } = ROAD_VIEW;
+  const dMax = dists[dists.length - 1] || 160;
+  const probs = Array.isArray(r.probs) ? r.probs : [];
+  let g = '';
+  for (const d of [25, 50, 75, 100, 125, 150]) {
+    if (d > dMax) break;
+    const y = (BOT - (d / dMax) * (BOT - TOP)).toFixed(1);
+    g += `<line x1="10" y1="${y}" x2="${W - 10}" y2="${y}" stroke="#2c313a"/>` +
+      `<text x="14" y="${+y - 4}" fill="#6b7280" font-size="11">${d}m</text>`;
+  }
+  g += `<line x1="${W / 2}" y1="${TOP}" x2="${W / 2}" y2="${BOT}" stroke="#3a4150" stroke-dasharray="2 4"/>`;
+  g += '<text x="14" y="34" fill="#6b7280" font-size="12">左（契约左正）←</text>' +
+    `<text x="${W - 96}" y="34" fill="#6b7280" font-size="12">→ 右</text>`;
+  (r.edges || []).forEach((e) => {
+    if (e) g += roadSvgLine(e, dists, dMax, '#d9a441', 0.85, true, 2);
+  });
+  (r.lines || []).forEach((l, i) => {
+    if (!l) return; // 整线 null：虚位（不画假想补全）
+    const inner = i === 1 || i === 2;
+    const op = Math.max(0.25, probs[i] === undefined ? 0.9 : probs[i]);
+    g += roadSvgLine(l, dists, dMax, inner ? '#cfd8dc' : '#78909c', op, false, inner ? 2.5 : 1.5);
+  });
+  if (Array.isArray(r.laneCenters)) g += roadSvgLine(r.laneCenters, dists, dMax, '#4caf50', 0.7, true, 1.5);
+  (r.leads || []).forEach((ld) => {
+    const [px, py] = roadXY(ld.y || 0, ld.d || 0, dMax);
+    const lw = (1.85 * (W / 2 - 10) / LAT_MAX).toFixed(1);
+    const lh = Math.max(9, 4.6 * (BOT - TOP) / dMax).toFixed(1);
+    g += `<rect x="${(px - lw / 2).toFixed(1)}" y="${(py - lh / 2).toFixed(1)}" width="${lw}" height="${lh}"` +
+      ` rx="3" fill="#546e7a" fill-opacity="0.9" stroke="#90a4ae"/>`;
+    if (typeof ld.heading === 'number') {
+      const hx = (px - Math.sin(ld.heading) * 15).toFixed(1); // 左正 heading → 画面左偏
+      const hy = (py - Math.cos(ld.heading) * 15).toFixed(1);
+      g += `<line x1="${px.toFixed(1)}" y1="${py.toFixed(1)}" x2="${hx}" y2="${hy}" stroke="#e57373" stroke-width="2"/>`;
+    }
+  });
+  // 自车盒（底缘中央，给横向比例参照）
+  const ew = (1.9 * (W / 2 - 10) / LAT_MAX).toFixed(1);
+  g += `<rect x="${(W / 2 - ew / 2).toFixed(1)}" y="${BOT - 30}" width="${ew}" height="26" rx="4" fill="#1e88e5" fill-opacity="0.8"/>`;
+  svg.innerHTML = g;
+}
+
+// 陈旧淡出（对齐客户端「本地收包时刻」口径，不依赖设备墙钟）
+setInterval(() => {
+  const badge = document.getElementById('road-age');
+  const svg = document.getElementById('road-svg');
+  if (!badge || !svg) return;
+  if (!roadFeed.at) { badge.textContent = '—'; badge.className = 'badge'; return; }
+  const s = Math.round((Date.now() - roadFeed.at) / 1000);
+  badge.textContent = (roadFeed.last && roadFeed.last.frameId ? '#' + roadFeed.last.frameId + ' · ' : '') +
+    (s <= 2 ? '2s 内' : s + 's 前');
+  badge.className = 'badge ' + (s <= 3 ? 'ok' : 'bad');
+  svg.style.opacity = s <= 3 ? '1' : '0.3';
+}, 1000);
 
 const eventLog = [];
 on('events', (d) => {
@@ -215,6 +325,12 @@ on('confirm', (d) => onConfirmEvent(d));
 function renderSnapshots(sections) {
   const box = document.getElementById('snapshots');
   if (!box || !sections || typeof sections !== 'object') return;
+  // road 初值：frame 未到（offroad 打开面板）时先画快照段，frame 到达后以 2Hz 覆盖
+  if (!roadFeed.at && sections.road && sections.road.data) {
+    roadFeed.last = sections.road.data;
+    roadFeed.at = Date.now();
+    renderRoadSvg(sections.road.data);
+  }
   const names = Object.keys(sections).sort();
   box.innerHTML = names.map((name) => {
     const s = sections[name] || {};
@@ -493,5 +609,6 @@ document.getElementById('video-stop').addEventListener('click', stopVideo);
 /* ── 启动 ───────────────────────────────────────────────────────────── */
 renderCommandCards();
 renderParamGroups({});
+renderRoadSvg(null);
 loadStatusPage();
 wsConnect();

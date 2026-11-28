@@ -2,7 +2,7 @@
 mate — 车机事件实时推送服务（局域网）
 
 把 poller.py 推导的边沿事件（events / opstate / button / sound）与 2Hz 周期状态帧
-（frame：car/radar 段，喂驾驶屏连续值）通过 WebSocket 和 SSE 推给局域网客户端。
+（frame：car/radar/carrot/road 段，喂驾驶屏连续值与道路几何）通过 WebSocket 和 SSE 推给局域网客户端。
 
 服务定位原则：mate 只推「op 能获取、而局域网客户端无法自产」的数据；数据源在
 客户端侧的数据禁止回推——v2 的 navi kind（输入即 carrotmate 上行的导航数据）
@@ -13,8 +13,9 @@ mate — 车机事件实时推送服务（局域网）
   GET /ws                 WebSocket（heartbeat 20s）
   GET /stream             SSE（?kinds=events,sound 可过滤）
   GET /state                 一次性状态快照（car/radar/opstate/events/sound +
-                             services/panda/meta，v5 起再扩 18 个纯快照段
-                             device/…/params，见 poller.py v5 小节；不周期推流）
+                             services/panda/meta，v5 起再扩 19 个纯快照段
+                             device/…/params，v6.3 增 road（随 frame 推送），
+                             见 poller.py v5 小节；不周期推流）
   GET /health             健康检查（不鉴权，含 poller 心跳新鲜度与 onroad 标志）
   GET /sounds/<file.wav>  播放 sound 事件对应的音效文件（随语言目录切换）
   POST /command           v6 动作命令（白名单 + offroad_only + 敏感鉴权；需确认命令回 pending）
@@ -44,8 +45,9 @@ hello 带 fork 标识 flavor（客户端门控主键，非本 fork 的客户端�
 frame 含 carrot 段（carrotMan 遥测，v4 引入）；/state 与 WS snapshot 扩展 19 个
 纯快照段（device/peripheral/manager/proc/backup/temp/carParams/controls/carSP/
 control/plan/loc/gps/map/model/dmodel/odom/calib/params，见 poller.py v5 小节与
-API.md §5.3——文档计数写作 18，以段名列表为准）。旧客户端按既有约定忽略未知
-段/未知字段即可，无破坏性变更。历史：v5 = params 读写 API（双向控制）；
+API.md §5.3）。v6.3（additive）：frame 新增 road 段（modelV2 道路几何栅格采样，
+快照与 frame 同源同函数，见 poller.py road 小节与 API.md §5.4）。旧客户端按既有
+约定忽略未知段/未知字段即可，无破坏性变更。历史：v5 = params 读写 API（双向控制）；
 v4 = frame 增加 carrot 段；v3 = kind 收窄 + 2Hz frame（v3 客户端收到版本不符的
 error 后自行停止重连）。
 

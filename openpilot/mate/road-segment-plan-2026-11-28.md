@@ -1,5 +1,12 @@
 # mate v6.3 提案：`road` 段——模型道路几何与多目标采样（2026-11-28，rev2）
 
+> **状态（2026-11-28）**：已转 openspec change **`add-mate-road-segment`** 并完成服务端
+> 实现（poller 采样/接线 + 单测 + Web UI 验收卡 + API.md v6.3）。正式契约以
+> **API.md §4.5/§5.4** 为准——实现时另经 mouxancnb/webui 子模块实读比对，最终字段表
+> 比本文多 **`heights`（z 高程）、`laneCenters`（自车道中心线）、`pathStd`（规划横向
+> std）、`frameId`** 四项，并明确不抄 webui 的假直路回退/line_kinds/leads `i`；
+> 客户端接入按 **`road-client-guide-2026-11-28.md`** 开工。下文保留 rev2 推导记录。
+>
 > 读者：mate 服务端实现者。提案方：carrotmate（Android 车机端 SR 客户端）。
 > 结论先行：**新增一个 `road` 段（frame 推 + snapshot 拉，同源同函数），
 > 把 modelV2 的道路几何与时序目标在固定距离栅格上采样后下发。**
@@ -83,7 +90,8 @@ webui 评估的 fork 是新版 ModelV2，字段类型不同，但**坐标域语�
 ### 4.2 出现与停推规则（对齐既有 frame 语义）
 
 - `modelV2` 从未收到（offroad 启动初期）→ `road` 段不出现；
-- 模型帧无效（`modelV2.valid == false` 或 `sm.valid["modelV2"]` 未过——
+- 模型帧无效（**事件层** valid 旗标 `sm.valid["modelV2"]` 未过——ModelDataV2
+  结构体本身无 valid 字段，`fill_model_msg.py:80` 的 msg.valid 挂在外层事件上；
   预热/遮挡期模型会输出全零「笔直车道」，必须挂此门）→ 整段不发；
 - offroad 数据源停止 → 自动停推，last-wins；**客户端以本地收包时刻判新鲜度**
   （SR 现行口径：禁用设备墙钟 ts 防钟差，`SRSceneModels.kt:13`；frame 信封
@@ -119,7 +127,7 @@ x 是恒定栅格，问题退化为「在 33 点固定 x 网格上把 y 插值�
 2. 每个栅格距离 d：在 X_IDXS 上找区间线性插值 y，两位小数。
    栅格最大 160 < x[-1]=192，**不存在尾部越界**——rev1 的「钳位 vs null」
    （D2）是伪决策，两选项恒等价，直接插值即可；
-3. 整帧有效性：`modelV2.valid == false` → 返回 None（§4.2）；
+3. 整帧有效性：事件层 `sm.valid["modelV2"]` 未过 → 整段不发（§4.2；结构体无 valid 字段）；
 4. ~~静止/蠕行退化~~——rev1 的 `x[-1] < 20` 永不成立，删除。**蠕行/静止时
    车道线在空间域依然有效**（x 与车速无关），照发；模型线被遮挡由 probs
    自然 null 化，这正是 probs 判线比「整段消失」更好的原因。
@@ -183,7 +191,8 @@ x 是恒定栅格，问题退化为「在 33 点固定 x 网格上把 y 插值�
 ## 7. 测试清单（rev2 重写）
 
 - 新增 `road_sample` 单测：正常行驶帧 4 线 2 缘形状正确；
-  `laneLineProbs[i] < 阈值` → 该线 null 其余正常；`modelV2.valid=false` →
+  `laneLineProbs[i] < 阈值` → 该线 null 其余正常；事件层 valid 未过（road_sample 的
+`valid=false` 入参）→
   整段不发；**静止帧不再断言段消失**（改断言照常下发）；
 - **符号锚点测试（防双翻抵消）**：必须用方向地面真值而非对称断言——
   构造左线样本（源 y[0] < 0，右正域）→ 期望输出 `lines[i][0] > 0`（左正域）；

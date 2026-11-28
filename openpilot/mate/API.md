@@ -4,7 +4,7 @@
 方向盘按键、播报声音四类**边沿事件**与 2Hz 的 **frame 周期状态帧**（car/radar 段）
 通过 **WebSocket** 或 **SSE** 推给局域网客户端，并提供一次性状态快照 `GET /state`。
 
-> **协议版本：v6**（`hello.version = 6`）。v2 → v3 迁移要点见 §9；v3 → v4 变更：`frame` 新增 `carrot` 段（carrotMan 遥测）；v4 → v5 变更：`GET /state` 与 WS `snapshot` 扩展 18 个纯快照段（§5.3），kind 白名单、推送语义与鉴权均不变；v5 追加：`hello` 新增 `flavor` 字段（fork 标识，本仓为 `sunnypilot`）、params 读写 API（§10.1）；v5 → v6 变更：kind 新增 `confirm`（命令确认闭环）、`POST /command` / `POST /command/confirm` / `POST /route_geometry`（§10.2-§10.4）、params 写白名单扩容并引入 offroad_only 门控（§10.1），均向后兼容（老客户端忽略未知 kind / 端点即可）。
+> **协议版本：v6**（`hello.version = 6`）。v2 → v3 迁移要点见 §9；v3 → v4 变更：`frame` 新增 `carrot` 段（carrotMan 遥测）；v4 → v5 变更：`GET /state` 与 WS `snapshot` 扩展 18 个纯快照段（§5.3），kind 白名单、推送语义与鉴权均不变；v5 追加：`hello` 新增 `flavor` 字段（fork 标识，本仓为 `sunnypilot`）、params 读写 API（§10.1）；v5 → v6 变更：kind 新增 `confirm`（命令确认闭环）、`POST /command` / `POST /command/confirm` / `POST /route_geometry`（§10.2-§10.4）、params 写白名单扩容并引入 offroad_only 门控（§10.1），均向后兼容（老客户端忽略未知 kind / 端点即可）；v6.1/v6.2 增补见 §11/§12。**v6.3（additive）**：`frame` 新增 `road` 段并同步进快照——modelV2 道路几何与模型多目标的服务端栅格采样（§4.5/§5.4），kind 集、鉴权、params 均不变，老客户端忽略未知段即零影响。
 
 ## 0. 服务定位原则与架构
 
@@ -330,25 +330,28 @@ onroad 告警集合**发生变化时**推送（出现/消失去抖，不每帧�
 - **与 soundd 的唯一差异**：soundd 会等有限长音效播完才转 `none`，mate 没有音频时钟，
   推导结束即推 `none`（客户端只会提前停播，不会漏停）
 
-### 4.5 `frame` 周期状态帧（v3 新增；v4 增加 `carrot` 段）
+### 4.5 `frame` 周期状态帧（v3 新增；v4 增加 `carrot` 段；v6.3 增加 `road` 段）
 
-**2Hz 周期推送** `{car?, radar?}`，喂驾驶屏的连续值（车速/挡位/巡航/前车距离）。
-段与快照 `car`/`radar` 段**同源同函数**——一个拉（快照）一个推（frame），结构一致。
-last-wins 语义：允许丢帧（客户端直接以最新帧覆盖状态即可），offroad（数据源停止）
-自动停推。
+**2Hz 周期推送** `{car?, radar?, carrot?, road?}`，喂驾驶屏的连续值（车速/挡位/
+巡航/前车距离/道路几何）。段与快照同名段**同源同函数**——一个拉（快照）一个推
+（frame），结构一致。last-wins 语义：允许丢帧（客户端直接以最新帧覆盖状态即可），
+offroad（数据源停止）自动停推。
 
 ```json
 {
   "type": "frame",
   "data": {
     "car":   { "vEgoKph": 54.0, "gearShifter": "drive", "...": "..." },
-    "radar": { "leadOne": { "status": true, "dRel": 32.5, "...": "..." } }
+    "radar": { "leadOne": { "status": true, "dRel": 32.5, "...": "..." } },
+    "road":  { "dists": [5, 15, 30, 50, 80, 120, 160], "...": "见 §5.4" }
   }
 }
 ```
 
 段出现规则：仅包含有数据的段——`radarState` 从未见数据（offroad 启动初期）时
-`radar` 段不出现；两段都无更新（offroad）则整帧不推。
+`radar` 段不出现；`road` 段在事件层 `sm.valid["modelV2"]` 未过（预热/遮挡）或
+几何全无效时整段不出现（禁止下发全零「笔直车道」帧，客户端段缺席即隐藏淡出，
+不得回退假想直路）；各段都无更新（offroad）则整帧不推。
 
 #### `car` 段字段
 
@@ -409,6 +412,13 @@ Lead 对象（字段名与 carrotmate `Lead` 模型一致，`trackId` 即 cereal
 典型用法：手机端 SpeedLimitDetector/语音包告警改吃本段（v4 APK），不再依赖
 `car.speedLimitKph`（BYD 上恒 0）。
 
+#### `road` 段字段
+
+v6.3 新增，modelV2 道路几何与模型多目标的**服务端栅格采样**（carrotmate SR 透视
+场景数据面）。字段表、符号约定与采样规则见 §5.4——与快照 `road` 段完全一致
+（同源同函数）。适配说明（客户端工单、符号并存惯例、渲染注记）另见
+`road-client-guide-2026-11-28.md`。
+
 ---
 
 ## 5. `GET /state` 与 WS `snapshot`
@@ -437,7 +447,8 @@ Lead 对象（字段名与 carrotmate `Lead` 模型一致，`trackId` 即 cereal
 ```
 
 > 以上为节选。v5 全部新增段（device/peripheral/manager/proc/backup/temp/carParams/
-> controls/carSP/control/plan/loc/gps/map/model/dmodel/odom/calib/params）见 §5.3。
+> controls/carSP/control/plan/loc/gps/map/model/dmodel/odom/calib/params）见 §5.3；
+> v6.3 新增段（road）见 §5.4。
 
 - 每段自带 `ts`（Unix 墙钟秒，车机时钟错时自行对齐），客户端据此判断新鲜度
 - **未收到过的数据段不出现**（offroad 刚启动时 `car`/`opstate` 可能缺失；
@@ -515,7 +526,7 @@ Lead 对象（字段名与 carrotmate `Lead` 模型一致，`trackId` 即 cereal
 
 > 快照在 card 停发（offroad）后保持最后一次 onroad 值，新鲜度看 `car.ts`。
 
-### 5.3 v5 新增快照段（18 段）
+### 5.3 v5 新增快照段（19 段）
 
 v5 在 `/state` 与 WS `snapshot` 中新增以下状态段。与 `meta`/`services`/`panda` 同机制：
 
@@ -597,6 +608,54 @@ v5 在 `/state` 与 WS `snapshot` 中新增以下状态段。与 `meta`/`service
 - `calib`：`status`（`uncalibrated`/`calibrated`/`invalid`/`recalibrating`）、`calPerc`/`calCycle`/`validBlocks`、`rpyCalib`/`rpyCalibSpread`/`height`/`wideFromDeviceEuler`、`extrinsicMatrix`（3x3 行优先）
 - `params`：`latTorque = {valid, useParams, calPerc, latAccelFactorRaw/Filtered, latAccelOffsetRaw/Filtered, frictionCoefficientRaw/Filtered}`、`lateralDelay = {lateralDelay, estimate, estimateStd, validBlocks, status}`、`vehicle = {valid, steerRatio, steerRatioValid, stiffnessFactor, stiffnessFactorValid, angleOffsetDeg, angleOffsetValid, angleOffsetAverageDeg, angleOffsetAverageValid, roll}`
 
+### 5.4 v6.3 新增快照段（road）
+
+`road` 与 `car`/`radar` 同模式：**frame 推 + 快照拉，同源同函数**（`poller.road_sample`），
+数据源 `modelV2`（20Hz，frame 取窗口内最新帧）。与 `model` 段的分工：road=几何采样域
+（随帧下发，供 SR 绘制），model=决策摘要域（纯快照）——几何字段禁止再往 model 段加。
+
+**出现规则**：`modelV2` 从未收到（offroad 启动初期）不出现；事件层 `sm.valid["modelV2"]`
+未过或 4 线 2 缘全部无效 → 整段不发；offroad 停推后 last-wins，快照保持最后一次有效值。
+新鲜度由客户端以**本地收包时刻**判定（SR 现行口径，勿依赖设备墙钟；段内无自带 ts，
+快照信封 ts 仅作段序参考）。
+
+**符号约定**：源 modelV2 为 device frame **y 右正**（radard 换算 `yRel=-y[0]` 同源印证），
+服务端采样时已统一取负——**本段所有横偏值（lines/edges/leads.y/laneCenters）左正**，
+与 `radar` 段 `yRel` 同侧向，客户端可直用；`heights`（z）原样透传（语义待真车确认，
+翻转属 additive 修正）。缺省一律 null，禁止 0 占位。
+
+```json
+"road": {
+  "dists": [5, 15, 30, 50, 80, 120, 160],
+  "lines": [[1.8, 1.79, 1.76, "...7值"], null, [-1.8, -1.81, "..."], ["..."]],
+  "edges": [["...7"], null],
+  "heights": [[0.12, "...7"], null, ["..."], ["..."]],
+  "probs": [0.95, 0.9, 0.4, 0.1],
+  "laneCenters": [0.02, 0.03, null, "...7"],
+  "pathStd": [0.1, 0.14, 0.22, "...7"],
+  "leads": [
+    { "d": 31.2, "y": 1.9, "prob": 0.71, "v": 12.4, "a": -0.3,
+      "xStd": 1.1, "yStd": 0.4, "heading": 0.02 }
+  ],
+  "frameId": 4612
+}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `dists` | int[7] | 采样栅格（米），恒定自描述；**改栅格=改契约**（版本注记）。客户端可硬编码/缓存 |
+| `lines` | (float[7]\|null)[4] | `laneLines` 4 线横偏@栅格，左正，两位小数；整线 null=该线被有效性门剔除（`laneLineProbs[i] < 0.5`，恢复需连续 2 帧过阈） |
+| `edges` | (float[7]\|null)[2] | `roadEdges` 2 缘，同 null 规则；缘无逐线 prob，形状恒 2 |
+| `heights` | (float[7]\|null)[4] | `laneLines.z` 同栅格采样（路面相对高程，透视场景坡道/立交用），原样透传；与 lines 同步 null |
+| `probs` | float[4] | `laneLineProbs` 两位小数（与 lines 同帧一致；model 段的是快照域） |
+| `laneCenters` | (float\|null)[7] | 自车道中心线逐栅格点：夹住横向 0 的最近左右线对（\|y\|>0.2）取中点。单侧线 null 时仍可由外侧线构造（存活语义）；完全无夹 0 线对的点 null |
+| `pathStd` | float[7]\|null | 规划轨迹横向标准差@栅格（源 `position.yStd`）——供绘制规划带边缘软度；**规划线本身走 `dmodel.path` 多项式（客户端求值），勿双通道**。低速时 position 序列短，越界点 null |
+| `leads` | object[]≤3 | `leadsV3` 过滤排序：标量 `prob ≥ 0.3` 且 `2.0 < d < 150.0`，**按 d 升序**（槽序≠距离序）；`v` 为绝对速度模（非相对）；`heading`=左正域 `atan2`，**语义为 2s 窗相对运动方向**（0=同向远离，±π/2=横穿，\|h\|>π/2=对向），非车头朝向；样本差≈0 → null |
+| `frameId` | int | 源 modelV2.frameId——客户端识别重复帧（模型进程卡滞时内容不变照样重发） |
+
+采样在服务端完成（栅格来自消息自带的 x 序列，纯插值），客户端拿到即画；x 为模型
+恒定空间栅格（0→192m），**与车速无关**——静止/蠕行时几何仍有效，段照发不消失。
+
 ---
 
 ## 6. 其余接口
@@ -635,7 +694,8 @@ sound 事件的配套音效。目录随语言设置切换（`sounds` / `sounds_c
 - **对时**：用每段 `ts`（车机墙钟），不要用客户端本地收包时间推算状态时序。
 - **枚举容错**：所有枚举为字符串，未来新增值可能显示为 `"unknown"`，客户端要兜底。
 - **流量**：边沿事件全订阅约 1–3 条/秒（峰值在按键/告警瞬间）+ frame 2 条/秒
-  （约 0.6 KB/s），无需 topic 级节流；`/state` 一次约 4–8 KB。
+  （car/radar/carrot 约 0.6 KB/s；v6.3 起 onroad 含 road 段约 +1.5 KB/s，合计
+  峰值 ~2 KB/s），无需 topic 级节流；`/state` 一次约 4–8 KB（road 段 ~1 KB）。
 - **不要公网暴露**：设计为局域网使用；远程访问走 VPN/内网穿透并务必设置 `MateToken`。
 
 ## 8. 部署
@@ -873,7 +933,8 @@ no-store）或 503 `{"ok":false,"error":"ui mirror not active"}`（镜像从未
 | 鉴权 | 全部接口 `?token=` 或 Bearer；WS 走 `?token=` query | MateToken 未配置=放行（车内定位），`X-Mate-Auth` 头提示裸奔状态 |
 | 连接 | `GET /ws`（WS，JSON text + mirror binary） | hello（协议版本/kinds）→ subscribe(kinds) / snapshot / ping / mirror；断线自动补发 events/sound |
 | 连接 | `GET /stream`（SSE） | 同 WS 事件流的 HTTP 降级通道 |
-| 状态 | `GET /health`、`GET /state` | onroad 三态（v6.1 起含 poller 心跳检查）、19 段全量快照 |
+| 状态 | `GET /health`、`GET /state` | onroad 三态（v6.1 起含 poller 心跳检查）、全量快照（段数以 §5.3/§5.4 表为准） |
+| 道路几何 | `frame.road` + 快照 `road` 段 | v6.3：车道线/路缘/高程@固定栅格 + 模型多目标，左正契约，服务端已采样——SR 透视场景数据面（§4.5/§5.4 + road-client-guide） |
 | 调参 | `GET /params?names=`、`POST /param_set`、`GET /params/schema` | 白名单 23 键 schema 驱动；offroad_only 键 onroad 拒写 409/状态未知 503；写后回 echo 对账 |
 | 命令 | `POST /command`、`POST /command/confirm` | confirm 60s deny；**approve 前复查 offroad**，被拦 broadcast `blocked_offroad` 终态 + 409/503（v6.1） |
 | 审计 | `GET /param_changes`、`GET /param_changes/verify` | 哈希链 append-only；source=param_api/command/device/unknown（device=车机 UI/按钮直写漂移，2s 观察旁路） |

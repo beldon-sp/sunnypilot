@@ -119,3 +119,15 @@ td.src.device { color: var(--ok); }
   border-radius: 8px; font-size: 13px; animation: fadein .2s; }
 #toast .t.err { background: var(--danger); }
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+
+/* road 验收卡（v6.3） */
+#road-svg {
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  height: auto;
+  margin: 0 auto;
+  background: var(--panel, #1b1f26);
+  border-radius: 8px;
+  transition: opacity .4s;
+}
