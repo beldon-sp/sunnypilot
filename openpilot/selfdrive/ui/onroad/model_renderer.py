@@ -367,7 +367,11 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
         rl.draw_text_ex(self._radar_font, dist_label, rl.Vector2(x - dts.x / 2, y + 8), small_fs, 0, rl.Color(255, 255, 255, 220))
         rl.draw_text_ex(self._radar_font, lat_label, rl.Vector2(x - lts.x / 2, y - 80), small_fs, 0, rl.Color(255, 255, 255, 200))
       else:
-        # low/no speed confidence: bare marker (carrotpilot's "*")
+        # low/no speed confidence: boxed "*" marker (carrotpilot's "*" inside a frame)
+        box_size = 56
+        box_rect = rl.Rectangle(x - box_size / 2, y - box_size / 2, box_size, box_size)
+        rl.draw_rectangle_rounded(box_rect, 0.3, 10, rl.Color(0, 0, 0, 90))
+        rl.draw_rectangle_rounded_lines_ex(box_rect, 0.3, 10, 4, color)
         ts = measure_text_cached(self._radar_font, "*", 40, 0)
         rl.draw_text_ex(self._radar_font, "*", rl.Vector2(x - ts.x / 2, y - ts.y / 2), 40, 0, rl.Color(255, 255, 255, 220))
     rl.end_scissor_mode()
