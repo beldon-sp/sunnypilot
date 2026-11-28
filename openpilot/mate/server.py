@@ -65,6 +65,7 @@ from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params
 from openpilot.common.realtime import set_core_affinity
 from openpilot.common.swaglog import cloudlog
+from openpilot.mate import param_changes
 from openpilot.mate.poller import MatePoller
 
 PORT = int(os.environ.get("MATE_PORT", "8083"))
@@ -288,9 +289,16 @@ async def param_set_handler(request: web.Request) -> web.Response:
   except ValueError as e:
     return web.json_response({"ok": False, "error": str(e)}, status=400)
   try:
+    prev_raw = Params().get(name)
+  except Exception:
+    prev_raw = None
+  try:
     Params().put(name, coerced, block=True)
   except Exception as e:
     return web.json_response({"ok": False, "error": f"param put failed: {e}"}, status=500)
+  # 审计记账（v6.1 W3）：append 永不抛异常，失败不影响本次写入
+  param_changes.append_param_change(name, _param_out(name, prev_raw), coerced,
+                                    source="param_api", engaged=hub.onroad())
   # 写后立即读回，回显设备侧实际值（客户端读回确认以此对账）
   try:
     echo = _param_out(name, Params().get(name))
@@ -346,13 +354,18 @@ def _command_check_offroad(name: str) -> web.Response | None:
 
 def _exec_trigger_backup() -> str:
   """触发参数备份：backup_manager 仅在 offroad 轮询到该 param 时执行（真钩子）。"""
+  prev = Params().get_bool("BackupManager_CreateBackup")
   Params().put("BackupManager_CreateBackup", True, block=True)
+  param_changes.append_param_change("BackupManager_CreateBackup", prev, True,
+                                    source="command", engaged=hub.onroad())
   return "BackupManager_CreateBackup set; backup_manager (offroad) will consume it"
 
 
 def _exec_reboot_device() -> str:
   """设备重启：manager 主循环轮询到 DoReboot 后退出并 HARDWARE.reboot()（真钩子）。"""
+  prev = Params().get_bool("DoReboot")
   Params().put("DoReboot", True, block=True)
+  param_changes.append_param_change("DoReboot", prev, True, source="command", engaged=hub.onroad())
   return "DoReboot set; manager will exit and reboot the device"
 
 
@@ -547,6 +560,55 @@ def _atomic_write_json(path: str, payload: dict) -> None:
   with open(tmp, "w", encoding="utf-8") as f:
     json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
   os.replace(tmp, path)
+
+
+# ── v6.1 W3 审计端点（/param_changes + /param_changes/verify）─────────
+async def param_changes_handler(request: web.Request) -> web.Response:
+  """GET /param_changes?limit=&name=&source=：变更记录（新在前）。
+  source ∈ param_api / command / device / unknown。"""
+  check_auth(request)
+  try:
+    limit = max(0, int(request.query.get("limit") or 0))
+  except ValueError:
+    return web.json_response({"ok": False, "error": "limit must be int"}, status=400)
+  records = param_changes.read_param_changes(
+    limit=limit, name=request.query.get("name") or "", source=request.query.get("source") or "")
+  return web.json_response({"ok": True, "count": len(records), "records": records})
+
+
+async def param_changes_verify_handler(request: web.Request) -> web.Response:
+  """GET /param_changes/verify：哈希链重走校验；断链报 broken_at + reason
+  （截断 / 篡改 / 半行写坏都定位到第一条不可信记录）。"""
+  check_auth(request)
+  return web.json_response(param_changes.verify_param_changes())
+
+
+def _read_whitelist_values(keys: list[str]) -> dict:
+  """漂移观察的原始读数：白名单全部键的归一值（读失败记 None）。"""
+  params = Params()
+  out = {}
+  for key in keys:
+    try:
+      raw = params.get(key)
+    except Exception:
+      raw = None
+    out[key] = _param_out(key, raw)
+  return out
+
+
+async def _drift_observer():
+  """设备侧漂移观察（v6.1 W3，决策点 3=做）：2s 节流旁路读白名单全部键，
+  与已知值比对——车机 UI / 拨轮按钮直接写 Params 永远不经过 mate，
+  漂移即补 source=device 审计记录。跑在事件循环上（to_thread 读盘），
+  与 poller 线程解耦，无循环导入。"""
+  keys = sorted(PARAMS_WHITELIST)
+  while True:
+    await asyncio.sleep(2.0)
+    try:
+      values = await asyncio.to_thread(_read_whitelist_values, keys)
+      param_changes.observe_param_values(values, allowed=set(keys))
+    except Exception:
+      cloudlog.exception("mate drift observer failed")
 
 
 class Hub:
@@ -759,6 +821,7 @@ async def health_handler(request: web.Request):
 
 async def _bind_loop(_app: web.Application) -> None:
   hub.loop = asyncio.get_running_loop()
+  asyncio.create_task(_drift_observer(), name="mate-drift-observer")
 
 
 def main():
@@ -782,6 +845,8 @@ def main():
     web.post("/command", command_handler),
     web.post("/command/confirm", command_confirm_handler),
     web.post("/route_geometry", route_geometry_handler),
+    web.get("/param_changes", param_changes_handler),
+    web.get("/param_changes/verify", param_changes_verify_handler),
   ])
   cloudlog.event("mate listening", port=PORT)
   web.run_app(app, host="0.0.0.0", port=PORT, print=None)
