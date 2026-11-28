@@ -810,3 +810,75 @@ param 门控，mate 只中转 SDP，媒体走 ICE/UDP 浏览器 ↔ webrtcd 点�
   审计（/param_changes + verify 徽章）、视频（WebRTC 三路切换）。
 - same-origin 托管：API 不带任何 CORS 头，跨域一律拒（webui CORS 反射
   漏洞的结构性免疫）。
+
+## 12. v6.2 增补：UI 屏幕镜像 + carrotmate 对接清单（additive，PROTOCOL_VERSION 保持 6）
+
+> 背景：界面渲染归 carrotmate 客户端，mate 只负责服务端能力。本节先列
+> v6.2 新增的屏幕镜像，再给全量能力清单供 carrotmate 实现时对照。
+
+### 12.1 屏幕镜像原理与管线
+
+```
+UI 进程（selfdrive/ui，raylib）
+  render() yield 点（GL 线程）grab_frame()
+    → GPU 读回（texture 模式下自动翻转）
+    → writer 线程：降采样 640w → PNG → /dev/shm/mate_ui_mirror.png（原子替换）
+mate server
+  → WS mirror 二进制帧广播（mtime 变化才读文件，100ms 轮询）
+  → GET /ui/mirror 快照（最新单帧）
+消费侧（carrotmate / 浏览器 canvas）
+  → 解码 PNG 直接绘制；UI 屏幕显示什么，页面就看到什么
+```
+
+- 事实约束：本仓 libraylib_comma（pip 包 `raylib`，SConscript 直接引用同一
+  artifact）**仅支持 PNG 导出**（stb jpg/bmp/tga/qoi 均未编译），故镜像帧
+  为 PNG——消费侧解码零依赖，带宽 640w 下 onroad 场景 ~200-400KB/帧。
+- **零开销原则**：`UiMirrorEnabled`（默认关）+ 消费者哨兵双层门控——没人看
+  时 UI 进程每 tick 仅一次 stat，抓帧/编码全部跳过；CPU 消耗只在"参数开
+  且有客户端订阅"时发生。
+- UI 进程任何镜像异常**整体自停**（_failed），永不威胁驾驶界面可用性。
+
+### 12.2 WS 镜像通道（鉴权 WS 内，text JSON 控制帧 + binary 数据帧）
+
+```
+→ 发 {"type": "mirror", "enable": true|false}
+← {"type": "mirrorState", "data": {"enabled": true|false}}
+← [binary] raw PNG bytes   （UI 出新帧时推送，≤10fps，慢消费者丢帧不积压）
+```
+
+- 语义：enable=true 成为消费者后，mate 触碰
+  `/dev/shm/mate_ui_mirror.png.active` 哨兵 → UI 开始抓帧；最后一个消费者
+  退订/断连（服务端 finally 幂等清理）后哨兵删除 → UI 停抓。
+- **先决条件**：`UiMirrorEnabled` 参数须为 true（可经 `/param_set` 写，
+  offroad_only=false 任意时刻可写），否则哨兵在但 UI 不出帧——
+  `mirrorState` 只表示订阅关系，不代表数据流，客户端以实际收到 binary
+  帧为准。
+- 二进制帧无包装头，即 PNG 文件字节；分辨率 = UI 高度按 640 宽等比缩放。
+
+### 12.3 `GET /ui/mirror`
+
+最新一帧 PNG 快照（`check_auth` 口径）：200 `image/png`（Cache-Control:
+no-store）或 503 `{"ok":false,"error":"ui mirror not active"}`（镜像从未
+产出 / 文件不存在）。适合低频轮询或取首帧；连续画面请走 12.2 的 WS 通道。
+
+### 12.4 白名单变更
+
+`UiMirrorEnabled`（bool，offroad_only=false，group=misc）入白名单，
+写路径自动过审计链（source=param_api）。
+
+### 12.5 carrotmate 对接清单（mate 全量服务端能力，v6.2 时点）
+
+| 域 | 接口 | 说明 |
+|---|---|---|
+| 鉴权 | 全部接口 `?token=` 或 Bearer；WS 走 `?token=` query | MateToken 未配置=放行（车内定位），`X-Mate-Auth` 头提示裸奔状态 |
+| 连接 | `GET /ws`（WS，JSON text + mirror binary） | hello（协议版本/kinds）→ subscribe(kinds) / snapshot / ping / mirror；断线自动补发 events/sound |
+| 连接 | `GET /stream`（SSE） | 同 WS 事件流的 HTTP 降级通道 |
+| 状态 | `GET /health`、`GET /state` | onroad 三态（v6.1 起含 poller 心跳检查）、19 段全量快照 |
+| 调参 | `GET /params?names=`、`POST /param_set`、`GET /params/schema` | 白名单 23 键 schema 驱动；offroad_only 键 onroad 拒写 409/状态未知 503；写后回 echo 对账 |
+| 命令 | `POST /command`、`POST /command/confirm` | confirm 60s deny；**approve 前复查 offroad**，被拦 broadcast `blocked_offroad` 终态 + 409/503（v6.1） |
+| 审计 | `GET /param_changes`、`GET /param_changes/verify` | 哈希链 append-only；source=param_api/command/device/unknown（device=车机 UI/按钮直写漂移，2s 观察旁路） |
+| 视频 | `GET /webrtc/schema`、`POST /webrtc/offer` | WebRTC 信令中转，媒体 ICE/UDP 点对点；`IsLiveStreaming` 门控；隐私敏感面鉴权 |
+| 屏幕 | WS mirror 通道、`GET /ui/mirror` | v6.2，见 §12.2/12.3；`UiMirrorEnabled` 门控 |
+| 声音 | `GET /sounds/{filename}` | UI 提示音文件 |
+| 导航 | `POST /route_geometry` | 上行路线几何（MateGeometrySource） |
+| Web UI | `GET /ui`（浏览器） | mate 自带 vanilla 排障页（与 carrotmate 并存，浏览器侧排障用） |

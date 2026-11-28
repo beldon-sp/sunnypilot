@@ -221,6 +221,8 @@ PARAMS_WHITELIST: dict[str, ParamSpec] = {
   "ExperimentalMode": ParamSpec("bool", None, None, False, "misc", "cem 实验模式"),
   "IsLiveStreaming": ParamSpec("bool", None, None, False, "misc",
                                "直播旁路开关（拉起 stream_encoderd+webrtcd；旁路与驾驶路径物理隔离）"),
+  "UiMirrorEnabled": ParamSpec("bool", None, None, False, "misc",
+                               "车机屏幕镜像抓帧（10fps PNG /dev/shm，仅在有客户端订阅时消耗 CPU）"),
 }
 
 
@@ -708,6 +710,18 @@ async def webrtc_schema_handler(request: web.Request) -> web.Response:
   return web.json_response({"ok": False, "error": f"webrtcd http {status}", "port": WEBRTCD_PORT}, status=502)
 
 
+async def ui_mirror_snapshot_handler(request: web.Request) -> web.Response:
+  """GET /ui/mirror → 最近一帧 UI 镜像 PNG（快照口径，供客户端轮询或
+  预览首帧；连续帧走 WS mirror 二进制通道）。镜像未产出时 503。"""
+  check_auth(request)
+  try:
+    data = await asyncio.to_thread(_read_ui_mirror_frame)
+  except OSError:
+    return web.json_response({"ok": False, "error": "ui mirror not active"}, status=503)
+  return web.Response(body=data, content_type="image/png",
+                      headers={"Cache-Control": "no-store"})
+
+
 async def webrtc_offer_handler(request: web.Request) -> web.Response:
   """POST /webrtc/offer {"sdp": "...", "camera": "road|wideRoad|driver"} →
   SDP answer。信令面 3 秒级超时；webrtcd 未就绪报 502。"""
@@ -733,6 +747,20 @@ async def webrtc_offer_handler(request: web.Request) -> web.Response:
 # auth_middleware 统一收口。API 一律不带 CORS 头 = 跨域一律拒。
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
+# ── v6.2 UI 屏幕镜像（UiMirrorEnabled 门控，selfdrive/ui/mirror.py 抓帧）──
+# UI 进程把渲染帧 PNG 原子写 UI_MIRROR_PATH；有消费者（WS mirror 订阅）时
+# mate 触碰 UI_MIRROR_ACTIVE 哨兵文件，UI 侧 stat 一下才知道"有人在看"，
+# 没人看零抓帧开销。测试用环境变量覆盖注入。
+UI_MIRROR_PATH = os.environ.get("MATE_UI_MIRROR_PATH", "/dev/shm/mate_ui_mirror.png")
+UI_MIRROR_ACTIVE_PATH = os.environ.get("MATE_UI_MIRROR_ACTIVE_PATH", "/dev/shm/mate_ui_mirror.png.active")
+UI_MIRROR_POLL_S = 0.1  # 广播轮询周期，≈抓帧 fps 上限
+
+
+def _read_ui_mirror_frame() -> bytes:
+  """读最近一帧镜像 PNG（async 调用方经 to_thread 使用，避免阻塞事件循环）。"""
+  with open(UI_MIRROR_PATH, "rb") as f:
+    return f.read()
+
 
 @web.middleware
 async def auth_middleware(request: web.Request, handler) -> web.StreamResponse:
@@ -757,6 +785,7 @@ class Hub:
   def __init__(self):
     self.loop: asyncio.AbstractEventLoop | None = None
     self.clients: dict[asyncio.Queue, frozenset[str]] = {}
+    self.mirror_consumers: set[asyncio.Queue] = set()  # v6.2 订阅 mirror 二进制帧的 WS 队列
     self.replay: dict[str, str] = {}  # kind -> 最新 envelope（供新连接补发）
     self.snapshot: dict[str, dict] = {}  # kind -> 最新 data（GET /state 用）
     self._snapshot_lock = threading.Lock()
@@ -769,6 +798,36 @@ class Hub:
 
   def remove_client(self, q: asyncio.Queue) -> None:
     self.clients.pop(q, None)
+
+  # ── v6.2 UI 镜像消费者 ──
+  def add_mirror_consumer(self, q: asyncio.Queue) -> None:
+    """WS 客户端订阅 mirror 二进制帧。首个订阅者触碰 .active 哨兵，
+    UI 侧据此开始抓帧（无人看时 UI 零开销）。"""
+    first = not self.mirror_consumers
+    self.mirror_consumers.add(q)
+    if first:
+      try:
+        with open(UI_MIRROR_ACTIVE_PATH, "w") as f:
+          f.write(str(int(wallclock())))
+      except OSError:
+        pass
+
+  def remove_mirror_consumer(self, q: asyncio.Queue) -> None:
+    self.mirror_consumers.discard(q)
+    if not self.mirror_consumers:
+      try:
+        os.unlink(UI_MIRROR_ACTIVE_PATH)
+      except OSError:
+        pass
+
+  def broadcast_mirror(self, data: bytes) -> None:
+    """镜像帧广播（mirror_broadcaster 任务调用）：payload 为 bytes，
+    pump 端按二进制帧发送。慢消费者直接丢帧——镜像宁可掉帧不积压。"""
+    for q in list(self.mirror_consumers):
+      try:
+        q.put_nowait(("mirror", data))
+      except asyncio.QueueFull:
+        pass
 
   def set_state(self, kind: str, data: dict) -> None:
     """car/services/panda/meta 这类状态段只进快照，不广播、不补发。每段带自己的写入时间。"""
@@ -861,8 +920,11 @@ async def ws_handler(request: web.Request):
 
   async def pump():
     while True:
-      _, payload = await q.get()
-      await ws.send_str(payload)
+      kind, payload = await q.get()
+      if isinstance(payload, bytes):  # v6.2 mirror 二进制帧（raw PNG）
+        await ws.send_bytes(payload)
+      else:
+        await ws.send_str(payload)
 
   pump_task = asyncio.create_task(pump())
   try:
@@ -881,6 +943,15 @@ async def ws_handler(request: web.Request):
         await ws.send_str(json.dumps({"type": "subscribed", "data": {"kinds": sorted(kinds)}}))
       elif rtype == "snapshot":
         await ws.send_str(json.dumps({"type": "snapshot", "data": hub.state_snapshot()}, ensure_ascii=False))
+      elif rtype == "mirror":
+        # v6.2 屏幕镜像订阅开关。enable=true 时首个消费者触碰 .active 哨兵
+        # 文件，UI 侧（UiMirrorEnabled 参数开启时）据此开始抓帧。
+        enable = bool(req.get("enable"))
+        if enable:
+          hub.add_mirror_consumer(q)
+        else:
+          hub.remove_mirror_consumer(q)
+        await ws.send_str(json.dumps({"type": "mirrorState", "data": {"enabled": enable}}, ensure_ascii=False))
       elif rtype == "ping":
         await ws.send_str(json.dumps({"type": "pong", "data": {"ts": time.monotonic()}}))
       # 未知消息忽略
@@ -889,6 +960,7 @@ async def ws_handler(request: web.Request):
   finally:
     pump_task.cancel()
     hub.remove_client(q)
+    hub.remove_mirror_consumer(q)  # 幂等：非消费者时无事发生
     cloudlog.event("mate ws disconnected", n=len(hub.clients))
   return ws
 
@@ -959,9 +1031,35 @@ async def health_handler(request: web.Request):
   })
 
 
+async def _mirror_broadcaster() -> None:
+  """v6.2 镜像帧广播：有消费者时按 mtime 变化读 PNG 喂给各订阅队列。
+  mtime 没变 = UI 侧没出新帧（没人看/抓帧停用），不读文件。"""
+  last_ts = 0.0
+  while True:
+    await asyncio.sleep(UI_MIRROR_POLL_S)
+    if not hub.mirror_consumers:
+      last_ts = 0.0
+      continue
+    try:
+      ts = os.stat(UI_MIRROR_PATH).st_mtime
+    except OSError:
+      last_ts = 0.0
+      continue
+    if ts <= last_ts:
+      continue
+    last_ts = ts
+    try:
+      data = await asyncio.to_thread(_read_ui_mirror_frame)
+    except OSError:
+      continue
+    if data:
+      hub.broadcast_mirror(data)
+
+
 async def _bind_loop(_app: web.Application) -> None:
   hub.loop = asyncio.get_running_loop()
   _app["drift_observer_task"] = asyncio.create_task(_drift_observer(), name="mate-drift-observer")
+  _app["mirror_broadcaster_task"] = asyncio.create_task(_mirror_broadcaster(), name="mate-mirror-broadcaster")
 
 
 def main():
@@ -988,6 +1086,7 @@ def main():
     web.post("/route_geometry", route_geometry_handler),
     web.get("/webrtc/schema", webrtc_schema_handler),
     web.post("/webrtc/offer", webrtc_offer_handler),
+    web.get("/ui/mirror", ui_mirror_snapshot_handler),
     web.get("/param_changes", param_changes_handler),
     web.get("/param_changes/verify", param_changes_verify_handler),
     web.get("/", ui_index_handler),

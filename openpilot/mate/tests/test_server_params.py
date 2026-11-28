@@ -203,7 +203,7 @@ class TestWhitelistShape:
   def test_no_other_params_leak(self):
     # 防扩散：白名单严格收敛，不得混入无关 key
     assert "MateToken" not in server.PARAMS_WHITELIST
-    assert len(server.PARAMS_WHITELIST) == 22  # 21 既有键 + IsLiveStreaming（v6.1 V1）
+    assert len(server.PARAMS_WHITELIST) == 23  # 21 既有键 + IsLiveStreaming + UiMirrorEnabled
 
   def test_no_credential_like_keys(self):
     # 凭据类键永远不得进入白名单（写通道只对控行为）
@@ -320,7 +320,7 @@ class TestWhitelistSchema:
   """v6.1 W4 schema 化元测试：白名单本身的结构完整性。"""
 
   def test_spec_integrity(self):
-    assert len(server.PARAMS_WHITELIST) == 22  # 21 既有键 + IsLiveStreaming
+    assert len(server.PARAMS_WHITELIST) == 23  # 21 既有键 + IsLiveStreaming + UiMirrorEnabled
     for name, spec in server.PARAMS_WHITELIST.items():
       assert spec.kind in ("bool", "int", "float"), name
       assert spec.group in server.PARAM_GROUPS, name

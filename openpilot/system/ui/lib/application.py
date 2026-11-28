@@ -830,6 +830,15 @@ class GuiApplication(GuiApplicationExt):
   def last_mouse_event(self) -> MouseEvent:
     return self._last_mouse_event
 
+  def grab_frame(self):
+    """UI 屏幕镜像抓帧（v6.2，UiMirrorEnabled 门控）：必须在 render() 的 yield 点
+    （GL 线程、本帧绘制完成后、交换前）调用。返回 (Image, flipped)——texture
+    渲染模式下（scale!=1 / BURN_IN / RECORD）读回上下颠倒，调用方需
+    image_flip_vertical 矫正；Image 由调用方 unload。"""
+    if self._render_texture:
+      return rl.load_image_from_texture(self._render_texture.texture), True
+    return rl.load_image_from_screen(), False
+
   def render(self):
     try:
       if self._profile_render_frames > 0:

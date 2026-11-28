@@ -5,6 +5,7 @@ import time
 from openpilot.cereal import messaging
 from openpilot.common.hardware import COMMA_HARDWARE
 from openpilot.common.realtime import Priority, config_realtime_process, set_core_affinity
+from openpilot.selfdrive.ui.mirror import UiMirror
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.selfdrive.ui.layouts.main import MainLayout
 from openpilot.selfdrive.ui.mici.layouts.main import MiciMainLayout
@@ -25,6 +26,7 @@ def main():
     MiciMainLayout()
 
   pm = messaging.PubMaster(['uiDebug'])
+  mirror = UiMirror(gui_app.grab_frame)
   for should_render, frame_time, cpu_time in gui_app.render():
     extra_start = time.monotonic()
     ui_state.update()
@@ -36,6 +38,9 @@ def main():
           set_core_affinity(list(cores))
         except OSError:
           pass
+
+      # 屏幕镜像抓帧（UiMirrorEnabled 门控，yield 点=本帧绘制完未交换，GL 线程）
+      mirror.tick(time.monotonic())
 
       extra_cpu = time.monotonic() - extra_start
       msg = messaging.new_message('uiDebug')
